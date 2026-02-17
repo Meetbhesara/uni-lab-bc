@@ -10,8 +10,10 @@ const cpUpload = upload.fields([{ name: 'images', maxCount: 10 }, { name: 'pdf',
 router.get('/', productController.getProducts);
 router.get('/:id', productController.getProductById);
 
-router.post('/', verifyAdmin, cpUpload, productController.createProduct);
-router.put('/:id', verifyAdmin, cpUpload, productController.updateProduct);
-router.delete('/:id', verifyAdmin, productController.deleteProduct);
+const auth = require('../middlewares/auth');
+
+router.post('/', auth, verifyAdmin, cpUpload, productController.createProduct);
+router.put('/:id', auth, verifyAdmin, cpUpload, productController.updateProduct);
+router.delete('/:id', auth, verifyAdmin, productController.deleteProduct);
 
 module.exports = router;
