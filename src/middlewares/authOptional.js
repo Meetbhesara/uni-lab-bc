@@ -6,7 +6,7 @@ module.exports = function (req, res, next) {
 
     // Check if not token
     if (!tokenHeader) {
-        return res.status(401).json({ msg: 'No token, authorization denied' });
+        return next(); // Proceed without user
     }
 
     let token = tokenHeader;
@@ -20,6 +20,7 @@ module.exports = function (req, res, next) {
         req.user = decoded; // { id: ..., isAdmin: ... }
         next();
     } catch (err) {
-        res.status(401).json({ msg: 'Token is not valid' });
+        // Invalid token - treat as guest
+        next();
     }
 };

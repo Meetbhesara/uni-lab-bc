@@ -7,8 +7,9 @@ const EnquirySchema = new mongoose.Schema({
     message: { type: String },
     products: [{
         productId: { type: mongoose.Schema.Types.ObjectId, ref: 'Product' },
-        // other fields?
+        quantity: { type: Number, default: 1 }
     }],
+    type: { type: String, default: 'enquiry' },
     status: { type: String, default: 'Pending' },
     createdAt: { type: Date, default: Date.now }
 });

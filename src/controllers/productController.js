@@ -199,7 +199,19 @@ const updateProduct = async (req, res) => {
         let product = await Product.findById(req.params.id);
         if (!product) return res.status(404).json({ msg: 'Product not found' });
 
-        const { name, description, details, sellingPriceStart, sellingPriceEnd, purchasePrice, dealerPrice, vendor, alternativeNames } = req.body;
+        const { name, description, details, alternativeNames } = req.body;
+
+        // Helper to clean numbers
+        const cleanNumber = (val) => {
+            if (val === '' || val === null || val === undefined) return undefined;
+            return val;
+        };
+
+        const sellingPriceStart = cleanNumber(req.body.sellingPriceStart);
+        const sellingPriceEnd = cleanNumber(req.body.sellingPriceEnd);
+        const purchasePrice = cleanNumber(req.body.purchasePrice);
+        const dealerPrice = cleanNumber(req.body.dealerPrice);
+        const vendor = req.body.vendor;
 
         if (name) product.name = name;
         if (description) product.description = description;
@@ -207,7 +219,7 @@ const updateProduct = async (req, res) => {
         if (sellingPriceEnd !== undefined) product.sellingPriceEnd = sellingPriceEnd;
         if (purchasePrice !== undefined) product.purchasePrice = purchasePrice;
         if (dealerPrice !== undefined) product.dealerPrice = dealerPrice;
-        if (vendor) product.vendor = vendor;
+        if (vendor !== undefined) product.vendor = vendor;
 
         if (alternativeNames !== undefined) {
             let parsedAlternativeNames = alternativeNames;
