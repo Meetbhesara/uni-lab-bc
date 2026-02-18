@@ -75,13 +75,14 @@ const getProducts = async (req, res) => {
 
         let products = await Product.find(query);
 
-        if (!showPurchasePrice) {
-            products = products.map(product => {
-                const p = product.toObject();
+        products = products.map(product => {
+            // Flatten Maps (details) to ensure they appear as Objects in JSON
+            const p = product.toObject({ getters: true, virtuals: false, flattenMaps: true });
+            if (!showPurchasePrice) {
                 delete p.purchasePrice;
-                return p;
-            });
-        }
+            }
+            return p;
+        });
 
         res.json(products);
     } catch (err) {
@@ -109,13 +110,14 @@ const getProductById = async (req, res) => {
             } catch (e) { }
         }
 
+        // Always flatten Maps for consistency
+        const p = product.toObject({ getters: true, virtuals: false, flattenMaps: true });
+
         if (!showPurchasePrice) {
-            const p = product.toObject();
             delete p.purchasePrice;
-            return res.json(p);
         }
 
-        res.json(product);
+        res.json(p);
     } catch (err) {
         console.error(err.message);
         if (err.kind === 'ObjectId') {
