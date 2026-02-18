@@ -52,13 +52,31 @@ const getProducts = async (req, res) => {
     try {
         const { search } = req.query;
         let query = {};
-        const user = getUserFromRequest(req);
+
+        // MANUALLY CHECK AUTH TOKEN SINCE ROUTE IS PUBLIC
+        let user = null;
+        const tokenHeader = req.header('x-auth-token') || req.header('Authorization');
+        if (tokenHeader) {
+            try {
+                let token = tokenHeader;
+                if (tokenHeader.startsWith('Bearer ')) {
+                    token = tokenHeader.slice(7, tokenHeader.length).trimLeft();
+                }
+                if (token) {
+                    const jwt = require('jsonwebtoken'); // Lazy load
+                    const decoded = jwt.verify(token, process.env.JWT_SECRET);
+                    user = decoded.user || decoded; // Handle different payload structures
+                }
+            } catch (e) {
+                // Token invalid or expired, just treat as guest
+            }
+        }
 
         let showPurchasePrice = false;
         if (user && user.id) {
             try {
                 const dbUser = await require('../models/User').findById(user.id);
-                if (dbUser && dbUser.isAdmin) { // Simplified check based on User.isAdmin field
+                if (dbUser && dbUser.isAdmin) {
                     showPurchasePrice = true;
                 }
             } catch (e) { }
@@ -98,7 +116,23 @@ const getProductById = async (req, res) => {
             return res.status(404).json({ msg: 'Product not found' });
         }
 
-        const user = getUserFromRequest(req);
+        // MANUALLY CHECK AUTH TOKEN SINCE ROUTE IS PUBLIC
+        let user = null;
+        const tokenHeader = req.header('x-auth-token') || req.header('Authorization');
+        if (tokenHeader) {
+            try {
+                let token = tokenHeader;
+                if (tokenHeader.startsWith('Bearer ')) {
+                    token = tokenHeader.slice(7, tokenHeader.length).trimLeft();
+                }
+                if (token) {
+                    const jwt = require('jsonwebtoken');
+                    const decoded = jwt.verify(token, process.env.JWT_SECRET);
+                    user = decoded.user || decoded;
+                }
+            } catch (e) { }
+        }
+
         let showPurchasePrice = false;
 
         if (user && user.id) {
