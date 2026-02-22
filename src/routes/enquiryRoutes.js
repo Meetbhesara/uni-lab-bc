@@ -15,7 +15,7 @@ router.post('/', async (req, res) => {
 router.get('/', async (req, res) => {
     try {
         const enquiries = await Enquiry.find()
-            .populate('products.productId', 'name images photos image')
+            .populate('products.productId')
             .sort({ createdAt: -1 });
         res.json(enquiries);
     } catch (e) { res.status(500).send('Error'); }
