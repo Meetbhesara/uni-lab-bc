@@ -11,6 +11,7 @@ const EnquirySchema = new mongoose.Schema({
     }],
     type: { type: String, default: 'enquiry' },
     status: { type: String, default: 'Pending' },
+    isSeen: { type: Boolean, default: false },
     createdAt: { type: Date, default: Date.now }
 });
 

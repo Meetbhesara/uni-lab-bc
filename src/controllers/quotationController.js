@@ -1,11 +1,24 @@
 const Quotation = require('../models/Quotation');
 const Enquiry = require('../models/Enquiry');
-// const sendEmail = require('../utils/sendEmail'); // Disabled as I don't have this file content
-// const sendWhatsApp = require('../utils/sendWhatsApp'); // Disabled
+const Counter = require('../models/Counter');
+
+const getNextRefNo = async () => {
+    const year = new Date().getFullYear();
+    const counterId = `quotation_${year}`;
+
+    const counter = await Counter.findByIdAndUpdate(
+        counterId,
+        { $inc: { seq: 1 } },
+        { new: true, upsert: true }
+    );
+
+    const seq = String(counter.seq).padStart(6, '0');
+    return `${seq}-${year}`;
+};
 
 const createQuotation = async (req, res) => {
     try {
-        const { enquiryId, items, status, pdfPath, htmlContent, nextFollowUp, packaging, packagingGst } = req.body;
+        const { enquiryId, items, status, pdfPath, htmlContent, nextFollowUp, packaging, packagingGst, discount } = req.body;
 
         if (!enquiryId) {
             return res.status(400).json({ msg: 'Enquiry ID is required' });
@@ -22,20 +35,23 @@ const createQuotation = async (req, res) => {
         enquiry.status = 'Processed';
         await enquiry.save();
 
+        const refNo = await getNextRefNo();
+
         const newQuotation = new Quotation({
             enquiry: enquiryId,
+            refNo,
             items,
             status: status || 'Pending',
             pdfPath,
             htmlContent,
             nextFollowUp,
             packaging: packaging || 0,
-            packagingGst: packagingGst || 0
+            packagingGst: packagingGst || 0,
+            discount: discount || 0
         });
 
         const saved = await newQuotation.save();
         res.json(saved);
-        // Email/WhatsApp sending skipped in restoration
     } catch (err) {
         console.error(err.message);
         res.status(500).send('Server Error');
@@ -45,10 +61,7 @@ const createQuotation = async (req, res) => {
 const getQuotations = async (req, res) => {
     try {
         const list = await Quotation.find()
-            .populate({
-                path: 'enquiry',
-                // populate: { path: 'products.productId' } // Removed as Product/Schema might be inferred
-            })
+            .populate('enquiry')
             .populate('items.product')
             .sort({ createdAt: -1 });
         res.json(list);
@@ -60,7 +73,7 @@ const getQuotations = async (req, res) => {
 
 const updateQuotation = async (req, res) => {
     try {
-        const { status, pdfPath, followUp, followUps, nextFollowUp } = req.body;
+        const { status, pdfPath, htmlContent, followUp, followUps, nextFollowUp } = req.body;
         const quotation = await Quotation.findById(req.params.id).populate('enquiry');
 
         if (!quotation) {
@@ -70,6 +83,7 @@ const updateQuotation = async (req, res) => {
         if (nextFollowUp) quotation.nextFollowUp = nextFollowUp;
         if (status) quotation.status = status;
         if (pdfPath) quotation.pdfPath = pdfPath;
+        if (htmlContent) quotation.htmlContent = htmlContent;
 
         if (followUp) {
             const { date, note } = followUp;

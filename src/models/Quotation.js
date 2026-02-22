@@ -10,10 +10,12 @@ const QuotationItemSchema = new mongoose.Schema({
 
 const QuotationSchema = new mongoose.Schema({
     enquiry: { type: mongoose.Schema.Types.ObjectId, ref: 'Enquiry', required: true },
+    refNo: { type: String }, // e.g. "000001-2026"
     items: [QuotationItemSchema],
     subTotal: { type: Number },
-    packaging: { type: Number, default: 0 }, // New: Packaging Charges
-    packagingGst: { type: Number, default: 0 }, // New: GST on Packaging
+    discount: { type: Number, default: 0 }, // Flat discount amount
+    packaging: { type: Number, default: 0 }, // Packaging Charges
+    packagingGst: { type: Number, default: 0 }, // GST on Packaging
     gstTotal: { type: Number },
     grandTotal: { type: Number },
     status: { type: String, default: 'Pending', enum: ['Pending', 'Pass', 'Reject', 'Sent', 'Done'] },
@@ -24,7 +26,7 @@ const QuotationSchema = new mongoose.Schema({
         createdAt: { type: Date, default: Date.now }
     }],
     pdfPath: { type: String },
-    htmlContent: { type: String }, // Keeping for backward comp or generation
+    htmlContent: { type: String },
     nextFollowUp: { type: Date },
     createdAt: { type: Date, default: Date.now }
 });
@@ -47,13 +49,14 @@ QuotationSchema.pre('save', function (next) {
     }
 
     const packaging = this.packaging || 0;
+    const discount = this.discount || 0;
     // Assuming 18% GST on packaging if not provided explicitly, or we calculate it here
     const packagingGst = packaging * 0.18;
     this.packagingGst = packagingGst;
 
     this.subTotal = sub;
     this.gstTotal = gst + packagingGst; // Total GST includes product GST + packaging GST
-    this.grandTotal = sub + packaging + this.gstTotal;
+    this.grandTotal = sub + packaging + this.gstTotal - discount;
     next();
 });
 
