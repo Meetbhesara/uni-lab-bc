@@ -98,6 +98,7 @@ const getProducts = async (req, res) => {
             const p = product.toObject({ getters: true, virtuals: false, flattenMaps: true });
             if (!showPurchasePrice) {
                 delete p.purchasePrice;
+                delete p.vendors;
             }
             return p;
         });
@@ -149,6 +150,7 @@ const getProductById = async (req, res) => {
 
         if (!showPurchasePrice) {
             delete p.purchasePrice;
+            delete p.vendors;
         }
 
         res.json(p);
@@ -163,7 +165,7 @@ const getProductById = async (req, res) => {
 
 const createProduct = async (req, res) => {
     try {
-        const { name, description, details, sellingPriceStart, sellingPriceEnd, purchasePrice, dealerPrice, vendor, alternativeNames } = req.body;
+        const { name, description, details, sellingPriceStart, sellingPriceEnd, purchasePrice, dealerPrice, vendor, vendors, alternativeNames } = req.body;
 
         if (!name || !description) {
             return res.status(400).json({ msg: 'Please provide required fields' });
@@ -208,6 +210,19 @@ const createProduct = async (req, res) => {
             }
         }
 
+        let parsedVendors = [];
+        if (vendors) {
+            if (typeof vendors === 'string') {
+                try {
+                    parsedVendors = JSON.parse(vendors);
+                } catch (e) {
+                    console.error('Error parsing vendors:', e);
+                }
+            } else if (Array.isArray(vendors)) {
+                parsedVendors = vendors;
+            }
+        }
+
         const newProduct = new Product({
             name,
             description,
@@ -217,6 +232,7 @@ const createProduct = async (req, res) => {
             purchasePrice,
             dealerPrice,
             vendor,
+            vendors: parsedVendors,
             alternativeNames: parsedAlternativeNames,
             images,
             pdf
@@ -235,7 +251,7 @@ const updateProduct = async (req, res) => {
         let product = await Product.findById(req.params.id);
         if (!product) return res.status(404).json({ msg: 'Product not found' });
 
-        const { name, description, details, alternativeNames } = req.body;
+        const { name, description, details, alternativeNames, vendors } = req.body;
 
         // Helper to clean numbers
         const cleanNumber = (val) => {
@@ -256,6 +272,18 @@ const updateProduct = async (req, res) => {
         if (purchasePrice !== undefined) product.purchasePrice = purchasePrice;
         if (dealerPrice !== undefined) product.dealerPrice = dealerPrice;
         if (vendor !== undefined) product.vendor = vendor;
+
+        if (vendors !== undefined) {
+            let parsedVendors = vendors;
+            if (typeof vendors === 'string') {
+                try {
+                    parsedVendors = JSON.parse(vendors);
+                } catch (e) {
+                    parsedVendors = [];
+                }
+            }
+            product.vendors = parsedVendors;
+        }
 
         if (alternativeNames !== undefined) {
             let parsedAlternativeNames = alternativeNames;

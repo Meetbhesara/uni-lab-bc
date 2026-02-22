@@ -6,9 +6,13 @@ const ProductSchema = new mongoose.Schema({
     details: { type: Map, of: String }, // Assuming key-value pairs
     sellingPriceStart: { type: Number },
     sellingPriceEnd: { type: Number },
-    purchasePrice: { type: Number },
+    purchasePrice: { type: Number }, // Keep for backward compatibility
     dealerPrice: { type: Number },
-    vendor: { type: String },
+    vendor: { type: String }, // Keep for backward compatibility
+    vendors: [{
+        name: { type: String },
+        price: { type: Number }
+    }],
     alternativeNames: [String],
     images: [String], // Array of URLs
     pdf: { type: String }, // PDF URL
