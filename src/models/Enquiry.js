@@ -2,6 +2,9 @@ const mongoose = require('mongoose');
 
 const EnquirySchema = new mongoose.Schema({
     Name: { type: String, required: true }, // Using 'Name' capitalized based on controller usage
+    companyName: { type: String },
+    contactPersonName: { type: String },
+    gstNumber: { type: String },
     email: { type: String },
     phone: { type: String },
     message: { type: String },

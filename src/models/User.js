@@ -1,10 +1,13 @@
 const mongoose = require('mongoose');
 
 const UserSchema = new mongoose.Schema({
-    name: { type: String, required: true },
+    name: { type: String }, // can be optional, map to contactPersonName
     email: { type: String, required: true, unique: true },
     phone: { type: String, required: true },
-    password: { type: String, required: true },
+    password: { type: String }, // optional for guest users
+    companyName: { type: String },
+    contactPersonName: { type: String },
+    gstNumber: { type: String },
     isAdmin: { type: Boolean, default: false },
     createdAt: { type: Date, default: Date.now }
 });
