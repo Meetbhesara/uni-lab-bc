@@ -1,9 +1,8 @@
 const express = require('express');
 const router = express.Router();
 const Enquiry = require('../models/Enquiry');
-
 const User = require('../models/User');
-
+const Cart = require('../models/Cart');
 // Create enquiry
 router.post('/', async (req, res) => {
     try {
@@ -52,6 +51,20 @@ router.post('/', async (req, res) => {
             status: status || 'Pending'
         });
         await enquiry.save();
+
+        // 4. Clear the active cart
+        const { sessionId } = req.body;
+        const deleteConditions = [];
+        if (user && user._id) {
+            deleteConditions.push({ userId: user._id });
+        }
+        if (sessionId) {
+            deleteConditions.push({ sessionId: sessionId });
+        }
+
+        if (deleteConditions.length > 0) {
+            await Cart.deleteMany({ $or: deleteConditions });
+        }
 
         res.json(enquiry);
     } catch (e) {

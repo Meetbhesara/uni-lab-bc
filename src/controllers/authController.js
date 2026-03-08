@@ -88,4 +88,80 @@ const login = async (req, res) => {
     }
 };
 
-module.exports = { register, login };
+const phoneLogin = async (req, res) => {
+    const { phone } = req.body;
+
+    if (!phone) {
+        return res.status(400).json({ msg: 'Please enter phone number' });
+    }
+
+    try {
+        const user = await User.findOne({ phone });
+        if (!user) {
+            return res.status(404).json({ msg: 'User not found' });
+        }
+
+        const payload = {
+            id: user.id,
+            isAdmin: user.isAdmin
+        };
+        jwt.sign(
+            payload,
+            process.env.JWT_SECRET,
+            { expiresIn: process.env.JWT_EXPIRE || '365d' },
+            (err, token) => {
+                if (err) throw err;
+                res.json({ token, user: { id: user.id, name: user.name, email: user.email, phone: user.phone, isAdmin: user.isAdmin, companyName: user.companyName, contactPersonName: user.contactPersonName, gstNumber: user.gstNumber } });
+            }
+        );
+    } catch (err) {
+        console.error(err.message);
+        res.status(500).send('Server Error');
+    }
+};
+
+const phoneRegister = async (req, res) => {
+    const { phone, email, name, companyName, contactPersonName, gstNumber } = req.body;
+
+    if (!phone) {
+        return res.status(400).json({ msg: 'Please enter phone number' });
+    }
+
+    try {
+        let user = await User.findOne({ phone });
+        if (user) {
+            return res.status(400).json({ msg: 'User already exists' });
+        }
+
+        user = new User({
+            phone,
+            email: email || `${phone}@noemail.com`,
+            name: name || contactPersonName || companyName,
+            companyName,
+            contactPersonName,
+            gstNumber
+        });
+
+        await user.save();
+
+        const payload = {
+            id: user.id,
+            isAdmin: user.isAdmin
+        };
+
+        jwt.sign(
+            payload,
+            process.env.JWT_SECRET,
+            { expiresIn: process.env.JWT_EXPIRE || '365d' },
+            (err, token) => {
+                if (err) throw err;
+                res.json({ token, user: { id: user.id, name: user.name, email: user.email, phone: user.phone, isAdmin: user.isAdmin, companyName: user.companyName, contactPersonName: user.contactPersonName, gstNumber: user.gstNumber } });
+            }
+        );
+    } catch (err) {
+        console.error(err.message);
+        res.status(500).send('Server Error');
+    }
+};
+
+module.exports = { register, login, phoneLogin, phoneRegister };

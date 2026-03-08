@@ -91,6 +91,11 @@ const getProducts = async (req, res) => {
             };
         }
 
+        const { category } = req.query;
+        if (category && category !== 'All') {
+            query.category = { $regex: new RegExp(`^${category.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}$`, 'i') };
+        }
+
         let products = await Product.find(query);
 
         products = products.map(product => {
@@ -165,10 +170,10 @@ const getProductById = async (req, res) => {
 
 const createProduct = async (req, res) => {
     try {
-        const { name, description, details, sellingPriceStart, sellingPriceEnd, purchasePrice, dealerPrice, vendor, vendors, alternativeNames } = req.body;
+        const { name, description, category, details, sellingPriceStart, sellingPriceEnd, purchasePrice, dealerPrice, vendor, vendors, alternativeNames } = req.body;
 
-        if (!name || !description) {
-            return res.status(400).json({ msg: 'Please provide required fields' });
+        if (!name || !description || !category) {
+            return res.status(400).json({ msg: 'Please provide required fields: name, description, category' });
         }
 
         let images = [];
@@ -226,6 +231,7 @@ const createProduct = async (req, res) => {
         const newProduct = new Product({
             name,
             description,
+            category,
             details: parsedDetails,
             sellingPriceStart,
             sellingPriceEnd,
@@ -251,7 +257,7 @@ const updateProduct = async (req, res) => {
         let product = await Product.findById(req.params.id);
         if (!product) return res.status(404).json({ msg: 'Product not found' });
 
-        const { name, description, details, alternativeNames, vendors } = req.body;
+        const { name, description, category, details, alternativeNames, vendors } = req.body;
 
         // Helper to clean numbers
         const cleanNumber = (val) => {
@@ -267,6 +273,7 @@ const updateProduct = async (req, res) => {
 
         if (name) product.name = name;
         if (description) product.description = description;
+        if (category) product.category = category;
         if (sellingPriceStart !== undefined) product.sellingPriceStart = sellingPriceStart;
         if (sellingPriceEnd !== undefined) product.sellingPriceEnd = sellingPriceEnd;
         if (purchasePrice !== undefined) product.purchasePrice = purchasePrice;

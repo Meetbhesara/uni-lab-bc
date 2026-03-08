@@ -10,4 +10,7 @@ router.get('/:sessionId', authOptional, cartController.getCart); // Guest (with 
 
 router.post('/', authOptional, cartController.addToCart); // Both (userId or sessionId in body)
 
+router.delete('/:sessionId', authOptional, cartController.clearCart);
+router.delete('/', auth, cartController.clearCart);
+
 module.exports = router;

@@ -3,6 +3,7 @@ const mongoose = require('mongoose');
 const ProductSchema = new mongoose.Schema({
     name: { type: String, required: true },
     description: { type: String, required: true },
+    category: { type: String, required: true },
     details: { type: Map, of: String }, // Assuming key-value pairs
     sellingPriceStart: { type: Number },
     sellingPriceEnd: { type: Number },

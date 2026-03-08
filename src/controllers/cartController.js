@@ -43,7 +43,7 @@ const addToCart = async (req, res) => {
 
         if (cart) {
             // Check if product exists
-            let itemIndex = cart.products.findIndex(p => p.productId == productId);
+            let itemIndex = cart.products.findIndex(p => p.productId.toString() === productId.toString());
             if (itemIndex > -1) {
                 cart.products[itemIndex].quantity = quantity; // Update qty
             } else {
@@ -68,4 +68,26 @@ const addToCart = async (req, res) => {
     }
 };
 
-module.exports = { getCart, addToCart };
+const clearCart = async (req, res) => {
+    try {
+        const userId = req.user ? req.user.id : null;
+        const { sessionId } = req.params;
+
+        let query = {};
+        if (userId) {
+            query.userId = userId;
+        } else if (sessionId) {
+            query.sessionId = sessionId;
+        } else {
+            return res.status(400).json({ msg: "User ID or Session ID required" });
+        }
+
+        await Cart.findOneAndDelete(query);
+        res.json({ msg: "Cart cleared" });
+    } catch (err) {
+        console.error(err.message);
+        res.status(500).send('Server Error');
+    }
+};
+
+module.exports = { getCart, addToCart, clearCart };
