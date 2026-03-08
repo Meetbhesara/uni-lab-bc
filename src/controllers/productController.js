@@ -92,8 +92,11 @@ const getProducts = async (req, res) => {
         }
 
         const { category } = req.query;
-        if (category && category !== 'All') {
+        if (category && category !== 'All' && category !== 'undefined' && category !== 'null') {
             query.category = { $regex: new RegExp(`^${category.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}$`, 'i') };
+        } else if (!showPurchasePrice) {
+            // For public users browsing/searching, only fetch products that have properly been assigned a category
+            query.category = { $exists: true, $type: 'string', $nin: ['', 'undefined', 'null'] };
         }
 
         let products = await Product.find(query);
