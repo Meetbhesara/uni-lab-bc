@@ -52,12 +52,30 @@ router.post('/', async (req, res) => {
         });
         await enquiry.save();
 
-        // 4. Clear the active cart
+        // 4. Clear ALL cart documents related to this enquiry
         const { sessionId } = req.body;
         const deleteConditions = [];
+
+        // Delete by the user we found/created via email
         if (user && user._id) {
             deleteConditions.push({ userId: user._id });
         }
+
+        // Delete by phone (covers cases where user registered by phone and cart linked to that userId)
+        if (req.body.phone) {
+            try {
+                const phoneUser = await User.findOne({ phone: req.body.phone });
+                if (phoneUser && phoneUser._id) {
+                    // Only add if not already covered
+                    const alreadyCovered = deleteConditions.some(c => c.userId && c.userId.toString() === phoneUser._id.toString());
+                    if (!alreadyCovered) {
+                        deleteConditions.push({ userId: phoneUser._id });
+                    }
+                }
+            } catch (_) { /* silent */ }
+        }
+
+        // Delete by sessionId (guest carts)
         if (sessionId) {
             deleteConditions.push({ sessionId: sessionId });
         }

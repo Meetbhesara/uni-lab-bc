@@ -73,16 +73,15 @@ const clearCart = async (req, res) => {
         const userId = req.user ? req.user.id : null;
         const { sessionId } = req.params;
 
-        let query = {};
-        if (userId) {
-            query.userId = userId;
-        } else if (sessionId) {
-            query.sessionId = sessionId;
-        } else {
+        const deleteConditions = [];
+        if (userId) deleteConditions.push({ userId });
+        if (sessionId) deleteConditions.push({ sessionId });
+
+        if (deleteConditions.length === 0) {
             return res.status(400).json({ msg: "User ID or Session ID required" });
         }
 
-        await Cart.findOneAndDelete(query);
+        await Cart.deleteMany({ $or: deleteConditions });
         res.json({ msg: "Cart cleared" });
     } catch (err) {
         console.error(err.message);
