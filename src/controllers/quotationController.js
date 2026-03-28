@@ -16,9 +16,14 @@ const getNextRefNo = async () => {
     return `${seq}-${year}`;
 };
 
+const User = require('../models/User'); // Import User model
+
 const createQuotation = async (req, res) => {
     try {
-        const { enquiryId, items, status, pdfPath, htmlContent, nextFollowUp, packaging, packagingGst, discount } = req.body;
+        const { 
+            enquiryId, items, status, pdfPath, htmlContent, nextFollowUp, packaging, packagingGst, discount,
+            partyName, contactPerson, email, phone, gstNumber // New party details for potential correction
+        } = req.body;
 
         if (!enquiryId) {
             return res.status(400).json({ msg: 'Enquiry ID is required' });
@@ -32,10 +37,61 @@ const createQuotation = async (req, res) => {
             return res.status(404).json({ msg: 'Enquiry not found' });
         }
 
+        // --- Synchronize Party Details into Enquiry & User ---
+        // If the admin edited party details in the quotation creation modal, apply them back
+        if (partyName) {
+            enquiry.companyName = partyName;
+            enquiry.Name = partyName; // Primary display name
+        }
+        if (contactPerson) enquiry.contactPersonName = contactPerson;
+        if (email) enquiry.email = email;
+        if (phone) enquiry.phone = phone;
+        if (gstNumber) enquiry.gstNumber = gstNumber;
+
         enquiry.status = 'Processed';
         await enquiry.save();
 
-        const refNo = await getNextRefNo();
+        // Also update or create the User record based on the email provided
+        const finalEmail = email || enquiry.email;
+        if (finalEmail && finalEmail !== 'N/A') {
+            try {
+                let user = await User.findOne({ email: finalEmail });
+                if (user) {
+                    if (partyName) user.companyName = partyName;
+                    if (contactPerson) user.contactPersonName = contactPerson;
+                    if (phone) user.phone = phone;
+                    if (gstNumber) user.gstNumber = gstNumber;
+                    user.name = contactPerson || partyName || user.name;
+                    await user.save();
+                } else if (phone && phone !== 'N/A') {
+                    // Create minimal user if not exists
+                    user = new User({
+                        email: finalEmail,
+                        phone: phone,
+                        companyName: partyName || '',
+                        contactPersonName: contactPerson || '',
+                        name: contactPerson || partyName || 'Client',
+                        gstNumber: gstNumber || ''
+                    });
+                    await user.save();
+                }
+            } catch (userErr) { console.error("Could not sync user during quotation", userErr); }
+        }
+
+        // --- Generate Reference Number (Check for Revisions) ---
+        let refNo;
+        const existingQuotes = await Quotation.find({ enquiry: enquiryId }).sort({ createdAt: 1 });
+        
+        if (existingQuotes.length > 0) {
+            // It's a revision! Use the base ref from the first quotation
+            const firstQuote = existingQuotes[0];
+            // Split by '(' to get the base ref in case the first one somehow had a suffix
+            const baseRef = firstQuote.refNo ? firstQuote.refNo.split('(')[0] : (await getNextRefNo());
+            refNo = `${baseRef}(R${existingQuotes.length})`;
+        } else {
+            // First time quote for this enquiry
+            refNo = await getNextRefNo();
+        }
 
         const newQuotation = new Quotation({
             enquiry: enquiryId,

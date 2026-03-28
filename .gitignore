@@ -6,3 +6,20 @@ coverage/
 dist/
 build/
 .vscode/
+
+# WhatsApp Service (session data)
+whatsapp_auth/
+.wwebjs_cache/
+auth_info_baileys/
+
+# Debug files
+whatsapp_debug.txt
+*.log
+
+# Temp or scratch scripts
+addAdmin.js
+get-git-status.js
+auth_debug.js
+whatsapp_test.js
+test-whatsapp.js
+test_whatsapp.js
