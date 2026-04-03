@@ -3,8 +3,22 @@ const Enquiry = require('../models/Enquiry');
 const Counter = require('../models/Counter');
 
 const getNextRefNo = async () => {
-    const year = new Date().getFullYear();
-    const counterId = `quotation_${year}`;
+    const now = new Date();
+    const currentYear = now.getFullYear();
+    const currentMonth = now.getMonth() + 1; // 1-indexed (Jan=1, Apr=4)
+
+    let startYear, endYear;
+    // Indian Fiscal Year starts April 1st
+    if (currentMonth < 4) {
+        startYear = currentYear - 1;
+        endYear = currentYear;
+    } else {
+        startYear = currentYear;
+        endYear = currentYear + 1;
+    }
+
+    const fiscalYearStr = `${startYear}-${String(endYear).slice(-2)}`;
+    const counterId = `quotation_${fiscalYearStr}`;
 
     const counter = await Counter.findByIdAndUpdate(
         counterId,
@@ -12,8 +26,8 @@ const getNextRefNo = async () => {
         { new: true, upsert: true }
     );
 
-    const seq = String(counter.seq).padStart(6, '0');
-    return `${seq}-${year}`;
+    const seq = String(counter.seq).padStart(4, '0');
+    return `${fiscalYearStr} UL${seq}`;
 };
 
 const User = require('../models/User'); // Import User model
