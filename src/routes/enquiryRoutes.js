@@ -17,15 +17,22 @@ router.post('/', async (req, res) => {
         }
 
         // 2. Find or Create User
-        let user = await User.findOne({ email });
+        const lowerEmail = email.toLowerCase();
+        let user = await User.findOne({ email: lowerEmail });
+        
+        // --- NEW: Restrict if found user is an Admin ---
+        if (user && user.isAdmin) {
+            return res.status(400).json({ msg: 'Cannot process enquiry using administrative email accounts' });
+        }
+
         if (!user) {
             user = new User({
-                email,
+                email: lowerEmail,
                 phone,
                 companyName: companyName || '',
                 contactPersonName: contactPersonName || '',
                 gstNumber: gstNumber || '',
-                name: contactPersonName || companyName // Map base
+                name: contactPersonName || companyName || 'Client'
             });
             await user.save();
         } else {
@@ -112,6 +119,19 @@ router.patch('/:id/seen', async (req, res) => {
         if (!enquiry) return res.status(404).json({ msg: 'Enquiry not found' });
         res.json(enquiry);
     } catch (e) { res.status(500).send('Error'); }
+});
+
+// Delete enquiry
+router.delete('/:id', async (req, res) => {
+    try {
+        const enquiry = await Enquiry.findById(req.params.id);
+        if (!enquiry) return res.status(404).json({ msg: 'Enquiry not found' });
+        await enquiry.deleteOne();
+        res.json({ msg: 'Enquiry removed' });
+    } catch (e) {
+        console.error(e);
+        res.status(500).send('Error removing enquiry');
+    }
 });
 
 module.exports = router;

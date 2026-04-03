@@ -131,13 +131,24 @@ const phoneRegister = async (req, res) => {
     try {
         let user = await User.findOne({ phone });
         if (user) {
-            return res.status(400).json({ msg: 'User already exists' });
+            return res.status(400).json({ msg: 'User with this phone number already exists' });
+        }
+
+        // --- NEW: Restrict Admin and Existing Emails ---
+        if (email) {
+            const existingEmailUser = await User.findOne({ email: email.toLowerCase() });
+            if (existingEmailUser) {
+                if (existingEmailUser.isAdmin) {
+                    return res.status(400).json({ msg: 'Admin emails cannot be used for client accounts' });
+                }
+                return res.status(400).json({ msg: 'This email is already associated with another phone number' });
+            }
         }
 
         user = new User({
             phone,
-            email: email || `${phone}@noemail.com`,
-            name: name || contactPersonName || companyName,
+            email: email ? email.toLowerCase() : `${phone}@noemail.com`,
+            name: name || contactPersonName || companyName || 'Client',
             companyName,
             contactPersonName,
             gstNumber
@@ -295,22 +306,15 @@ const verifyAdminOtp = async (req, res) => {
 
 const createAdmin = async (req, res) => {
     const { name, email, phone } = req.body;
-    console.log('[DEBUG] createAdmin request body:', req.body);
 
     if (!name || !email || !phone) {
-        console.log('[DEBUG] Missing fields:', { name: !!name, email: !!email, phone: !!phone });
         return res.status(400).json({ msg: 'Please enter all fields' });
     }
 
     try {
         let user = await User.findOne({ email });
         if (user) {
-            console.log('[DEBUG] User already exists. Upgrading to admin: ', email);
-            user.isAdmin = true;
-            user.name = name || user.name;
-            user.phone = phone || user.phone;
-            await user.save();
-            return res.json({ msg: 'User updated to admin successfully', user: { id: user.id, name: user.name, email: user.email, phone: user.phone, isAdmin: user.isAdmin } });
+            return res.status(400).json({ msg: 'User already exists' });
         }
 
         user = new User({
@@ -319,6 +323,7 @@ const createAdmin = async (req, res) => {
             phone,
             isAdmin: true
         });
+
 
         await user.save();
 
