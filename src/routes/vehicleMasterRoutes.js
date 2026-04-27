@@ -3,7 +3,7 @@ const router = express.Router();
 const multer = require('multer');
 const path = require('path');
 const fs = require('fs');
-const { storeVehicleMaster, getVehicles } = require('../controllers/vehicleMasterController');
+const { storeVehicleMaster, getVehicles, updateVehicleMaster, deleteVehicleMaster } = require('../controllers/vehicleMasterController');
 
 // Dynamic Storage Configuration
 const storage = multer.diskStorage({
@@ -48,13 +48,23 @@ const upload = multer({
     }
 });
 
-// Use .fields to support specific RC Book and generic documents
 router.post('/', upload.fields([
     { name: 'rcBook', maxCount: 1 },
     { name: 'insurancePhoto', maxCount: 1 },
     { name: 'pucPhoto', maxCount: 1 },
+    { name: 'vehiclePhotos', maxCount: 10 },
     { name: 'documents', maxCount: 10 }
 ]), storeVehicleMaster);
+
+router.put('/:id', upload.fields([
+    { name: 'rcBook', maxCount: 1 },
+    { name: 'insurancePhoto', maxCount: 1 },
+    { name: 'pucPhoto', maxCount: 1 },
+    { name: 'vehiclePhotos', maxCount: 10 },
+    { name: 'documents', maxCount: 10 }
+]), updateVehicleMaster);
+
 router.get('/', getVehicles);
+router.delete('/:id', deleteVehicleMaster);
 
 module.exports = router;

@@ -39,6 +39,11 @@ const VehicleMasterSchema = new mongoose.Schema({
     logInName: {
         type: String
     },
+    vehiclePhotos: [{
+        name: String,
+        url: String,
+        path: String
+    }],
     documents: [{
         name: String,
         url: String,

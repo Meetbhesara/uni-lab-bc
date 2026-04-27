@@ -81,22 +81,34 @@ const updateInstrumentMaster = async (req, res) => {
         const files = req.files;
 
         const updateData = {};
-        if (refNo) updateData.refNo = refNo.trim();
-        if (instrumentName) updateData.instrumentName = instrumentName.trim();
+        if (refNo !== undefined) updateData.refNo = refNo.trim();
+        if (instrumentName !== undefined) updateData.instrumentName = instrumentName.trim();
         if (notes !== undefined) updateData.notes = notes ? notes.trim() : null;
 
-        if (files && files.photo) {
-            const f = Array.isArray(files.photo) ? files.photo[0] : files.photo;
-            updateData.photo = {
-                name: f.originalname,
-                url: `/uploads/instrument_master/${path.basename(f.path)}`,
-                path: f.path
-            };
+        if (files) {
+            if (files.photo) {
+                const f = Array.isArray(files.photo) ? files.photo[0] : files.photo;
+                updateData.photo = {
+                    name: f.originalname,
+                    url: `/uploads/instrument_master/${path.basename(f.path)}`,
+                    path: f.path
+                };
+            }
+            if (files.photos) {
+                const flist = Array.isArray(files.photos) ? files.photos : [files.photos];
+                const photos = flist.map(f => ({
+                    name: f.originalname,
+                    url: `/uploads/instrument_master/${path.basename(f.path)}`,
+                    path: f.path
+                }));
+                // Use $push to append or replace? Usually updates replace if provided
+                updateData.photos = photos;
+            }
         }
 
         const record = await InstrumentMaster.findByIdAndUpdate(
             req.params.id,
-            updateData,
+            { $set: updateData },
             { new: true, runValidators: true }
         );
 

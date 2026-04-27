@@ -3,7 +3,7 @@ const router = express.Router();
 const multer = require('multer');
 const path = require('path');
 const fs = require('fs');
-const { storeEmployeeMaster, updateEmployeeMaster, getEmployees, getNextEmpId } = require('../controllers/employeeMasterController');
+const { storeEmployeeMaster, updateEmployeeMaster, getEmployees, getNextEmpId, deleteEmployeeMaster } = require('../controllers/employeeMasterController');
 
 // Dynamic Storage Configuration
 const storage = multer.diskStorage({
@@ -14,7 +14,7 @@ const storage = multer.diskStorage({
 
         const namePart = (req.body.name || 'unknown').trim().replace(/[^a-z0-9]/gi, '_').toLowerCase();
         const idPart = (req.body.empId || 'unknown').trim().replace(/[^a-z0-9]/gi, '_').toLowerCase();
-        const folderName = `${namePart}-${idPart}`;
+        const folderName = idPart;
 
         let targetDir;
         if (useNas === 'true') {
@@ -64,5 +64,6 @@ router.put('/:id', upload.fields([
 ]), updateEmployeeMaster);
 
 router.get('/', getEmployees);
+router.delete('/:id', deleteEmployeeMaster);
 
 module.exports = router;

@@ -3,7 +3,7 @@ const ScheduleMaster = require('../models/ScheduleMaster');
 // POST - Create a new schedule
 const createSchedule = async (req, res) => {
     try {
-        const { client, site, scheduleDate, workForAppley, operativeNames, helpers, notes, status } = req.body;
+        const { client, site, scheduleDate, workForAppley, operativeNames, helpers, notes, status, dayStatus } = req.body;
 
         if (!client || !site || !scheduleDate) {
             return res.status(400).json({
@@ -20,7 +20,8 @@ const createSchedule = async (req, res) => {
             ...(operativeNames && { operativeNames }),
             ...(helpers && { helpers }),
             ...(notes && { notes }),
-            ...(status && { status })
+            ...(status && { status }),
+            ...(dayStatus && { dayStatus })
         });
 
         await schedule.save();
@@ -45,7 +46,7 @@ const updateSchedule = async (req, res) => {
         // Only update fields that are actually provided
         const updates = {};
         const unsets = {};
-        const allowedFields = ['client', 'site', 'scheduleDate', 'workForAppley', 'operativeNames', 'helpers', 'notes', 'status'];
+        const allowedFields = ['client', 'site', 'scheduleDate', 'workForAppley', 'operativeNames', 'helpers', 'notes', 'status', 'dayStatus'];
         allowedFields.forEach(field => {
             if (req.body[field] !== undefined) {
                 updates[field] = req.body[field];

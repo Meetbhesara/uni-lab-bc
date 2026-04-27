@@ -16,6 +16,11 @@ const InstrumentMasterSchema = new mongoose.Schema({
         url: String,
         path: String
     },
+    photos: [{
+        name: String,
+        url: String,
+        path: String
+    }],
     notes: {
         type: String,
         trim: true,

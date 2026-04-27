@@ -8,12 +8,12 @@ const storeEmployeeMaster = async (req, res) => {
     try {
         console.log('Incoming Employee Master data:', req.body);
         console.log('Incoming Employee Master files:', req.files);
-        const { 
-            name, 
-            email, 
+        const {
+            name,
+            email,
             phone,
-            addressLine1, 
-            addressLine2, 
+            addressLine1,
+            addressLine2,
             emergencyContact,
             bankDetails,
             salary,
@@ -27,18 +27,18 @@ const storeEmployeeMaster = async (req, res) => {
             catch (e) { return val; }
         };
 
-        // Autogenerate EMP ID
-        const counter = await Counter.findByIdAndUpdate(
-            'employeeId',
-            { $inc: { seq: 1 } },
-            { new: true, upsert: true }
-        );
-        const generatedEmpId = `${String(counter.seq).padStart(4, '0')}`;
+        // Autogenerate EMP ID (without separate Counter collection)
+        const lastEmployee = await EmployeeMaster.findOne({}, { empId: 1 }).sort({ empId: -1 });
+        let nextSeq = 1;
+        if (lastEmployee && lastEmployee.empId) {
+            nextSeq = parseInt(lastEmployee.empId) + 1;
+        }
+        const generatedEmpId = String(nextSeq).padStart(4, '0');
 
         // Folder naming: name-empId
         const namePart = (name || 'unknown').trim().replace(/[^a-z0-9]/gi, '_').toLowerCase();
         const idPart = generatedEmpId.toLowerCase();
-        const folderName = `${namePart}-${idPart}`;
+        const folderName = idPart;
 
         // If folder created by multer (using req.body.empId) is different, rename it
         const reqEmpId = (req.body.empId || '').toLowerCase();
@@ -46,8 +46,8 @@ const storeEmployeeMaster = async (req, res) => {
             const useNas = process.env.USE_NAS === 'true';
             const nasBase = process.env.NAS_BASE_PATH || '/volume1/work';
             const localBase = process.env.LOCAL_BASE_PATH || './uploads';
-            
-            const tempFolderName = `${namePart}-${reqEmpId}`;
+
+            const tempFolderName = reqEmpId;
             const absoluteLocalBase = path.isAbsolute(localBase) ? localBase : path.join(process.cwd(), localBase);
             const oldDir = path.join(absoluteLocalBase, 'employee_master', tempFolderName);
             const newDir = path.join(absoluteLocalBase, 'employee_master', folderName);
@@ -63,24 +63,24 @@ const storeEmployeeMaster = async (req, res) => {
         const fileToObj = (file) => {
             if (!file) return null;
             const f = Array.isArray(file) ? file[0] : file;
-            return { 
-                name: f.originalname, 
-                url: `/uploads/employee_master/${folderName}/${path.basename(f.path)}`, 
+            return {
+                name: f.originalname,
+                url: `/uploads/employee_master/${folderName}/${path.basename(f.path)}`,
                 path: f.path.replace(`-${reqEmpId}`, `-${idPart}`) // adjust path if renamed
             };
         };
 
         const parsedBankDetails = parse(bankDetails) || {};
 
-        const record = new EmployeeMaster({ 
+        const record = new EmployeeMaster({
             empId: generatedEmpId,
-            name, 
+            name,
             salary: Number(salary) || 0,
             designation,
-            email, 
+            email,
             phone,
-            addressLine1: parse(addressLine1), 
-            addressLine2: parse(addressLine2), 
+            addressLine1: parse(addressLine1),
+            addressLine2: parse(addressLine2),
             emergencyContact: parse(emergencyContact),
             bankDetails: {
                 bankName: parsedBankDetails.bankName || '',
@@ -96,10 +96,10 @@ const storeEmployeeMaster = async (req, res) => {
         });
 
         await record.save();
-        res.status(201).json({ 
-            success: true, 
-            message: 'Employee record stored successfully', 
-            data: record 
+        res.status(201).json({
+            success: true,
+            message: 'Employee record stored successfully',
+            data: record
         });
     } catch (error) {
         console.error('Error in storeEmployeeMaster:', error);
@@ -117,7 +117,7 @@ const updateEmployeeMaster = async (req, res) => {
         const oldRecord = await EmployeeMaster.findById(_id);
         if (!oldRecord) return res.status(404).json({ success: false, message: 'Employee not found' });
 
-        const { 
+        const {
             name, email, phone, addressLine1, addressLine2, emergencyContact, bankDetails, salary, designation
         } = req.body;
         const files = req.files;
@@ -129,10 +129,8 @@ const updateEmployeeMaster = async (req, res) => {
 
         const oldNamePart = oldRecord.name.trim().replace(/[^a-z0-9]/gi, '_').toLowerCase();
         const oldIdPart = oldRecord.empId.toLowerCase();
-        const oldFolderName = `${oldNamePart}-${oldIdPart}`;
-
-        const newNamePart = (name || oldRecord.name).trim().replace(/[^a-z0-9]/gi, '_').toLowerCase();
-        const newFolderName = `${newNamePart}-${oldIdPart}`;
+        const oldFolderName = oldIdPart;
+        const newFolderName = oldIdPart;
 
         // 1. Check if name changed -> rename directory if applicable
         if (oldFolderName !== newFolderName) {
@@ -181,10 +179,10 @@ const updateEmployeeMaster = async (req, res) => {
         const fileToObj = (file) => {
             if (!file) return null;
             const f = Array.isArray(file) ? file[0] : file;
-            return { 
-                name: f.originalname, 
-                url: `/uploads/employee_master/${newFolderName}/${path.basename(f.path)}`, 
-                path: f.path 
+            return {
+                name: f.originalname,
+                url: `/uploads/employee_master/${newFolderName}/${path.basename(f.path)}`,
+                path: f.path
             };
         };
 
@@ -201,20 +199,23 @@ const updateEmployeeMaster = async (req, res) => {
 
         const parsedBankDetails = parse(bankDetails) || {};
 
-        oldRecord.name = name;
-        oldRecord.salary = Number(salary) || oldRecord.salary;
-        oldRecord.designation = designation || oldRecord.designation;
-        oldRecord.email = email;
-        oldRecord.phone = phone;
-        oldRecord.addressLine1 = parse(addressLine1);
-        oldRecord.addressLine2 = parse(addressLine2);
-        oldRecord.emergencyContact = parse(emergencyContact);
-        oldRecord.bankDetails = {
-            bankName: parsedBankDetails.bankName || '',
-            accountName: parsedBankDetails.accountName || '',
-            accountNumber: parsedBankDetails.accountNumber || '',
-            ifscCode: parsedBankDetails.ifscCode || ''
-        };
+        if (name !== undefined) oldRecord.name = name;
+        if (salary !== undefined) oldRecord.salary = Number(salary) || oldRecord.salary;
+        if (designation !== undefined) oldRecord.designation = designation;
+        if (email !== undefined) oldRecord.email = email;
+        if (phone !== undefined) oldRecord.phone = phone;
+        if (addressLine1 !== undefined) oldRecord.addressLine1 = parse(addressLine1);
+        if (addressLine2 !== undefined) oldRecord.addressLine2 = parse(addressLine2);
+        if (emergencyContact !== undefined) oldRecord.emergencyContact = parse(emergencyContact);
+        if (bankDetails !== undefined) {
+            const pb = parse(bankDetails);
+            oldRecord.bankDetails = {
+                bankName: pb.bankName !== undefined ? pb.bankName : oldRecord.bankDetails.bankName,
+                accountName: pb.accountName !== undefined ? pb.accountName : oldRecord.bankDetails.accountName,
+                accountNumber: pb.accountNumber !== undefined ? pb.accountNumber : oldRecord.bankDetails.accountNumber,
+                ifscCode: pb.ifscCode !== undefined ? pb.ifscCode : oldRecord.bankDetails.ifscCode
+            };
+        }
 
         if (files?.photo) oldRecord.photo = fileToObj(files.photo);
         else if (oldRecord.photo) oldRecord.photo = updateUrlPath(oldRecord.photo);
@@ -251,10 +252,31 @@ const getEmployees = async (req, res) => {
 
 const getNextEmpId = async (req, res) => {
     try {
-        let counter = await Counter.findById('employeeId');
-        let nextSeq = counter ? counter.seq + 1 : 1;
-        const nextEmpId = `${String(nextSeq).padStart(4, '0')}`;
+        const lastEmployee = await EmployeeMaster.findOne({}, { empId: 1 }).sort({ empId: -1 });
+        let nextSeq = 1;
+        if (lastEmployee && lastEmployee.empId) {
+            nextSeq = parseInt(lastEmployee.empId) + 1;
+        }
+        const nextEmpId = String(nextSeq).padStart(4, '0');
         res.json({ success: true, nextEmpId });
+    } catch (error) {
+        res.status(500).json({ success: false, message: error.message });
+    }
+};
+
+const deleteEmployeeMaster = async (req, res) => {
+    try {
+        const _id = req.params.id;
+        const record = await EmployeeMaster.findByIdAndDelete(_id);
+        if (!record) return res.status(404).json({ success: false, message: 'Employee not found' });
+
+        // Optional: Delete physical files
+        const folderPath = path.join(process.cwd(), 'uploads', 'employee_master', record.empId);
+        if (fs.existsSync(folderPath)) {
+            fs.rmSync(folderPath, { recursive: true, force: true });
+        }
+
+        res.json({ success: true, message: 'Employee deleted successfully' });
     } catch (error) {
         res.status(500).json({ success: false, message: error.message });
     }
@@ -264,5 +286,6 @@ module.exports = {
     storeEmployeeMaster,
     updateEmployeeMaster,
     getEmployees,
-    getNextEmpId
+    getNextEmpId,
+    deleteEmployeeMaster
 };

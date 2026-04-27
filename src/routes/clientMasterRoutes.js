@@ -3,7 +3,7 @@ const router = express.Router();
 const multer = require('multer');
 const path = require('path');
 const fs = require('fs');
-const { storeClientMaster, updateClientMaster, getClients, getNextClientId } = require('../controllers/clientMasterController');
+const { storeClientMaster, updateClientMaster, getClients, getNextClientId, deleteClientMaster } = require('../controllers/clientMasterController');
 
 // Dynamic Storage Configuration
 const storage = multer.diskStorage({
@@ -14,7 +14,7 @@ const storage = multer.diskStorage({
 
         const namePart = (req.body.clientName || 'unknown_client').trim().replace(/[^a-z0-9]/gi, '_').toLowerCase();
         const idPart = (req.body.clientId || 'unknown').trim().replace(/[^a-z0-9]/gi, '_').toLowerCase();
-        const folderName = `${namePart}-${idPart}`;
+        const folderName = idPart;
 
         let targetDir;
         if (useNas === 'true') {
@@ -58,5 +58,6 @@ router.put('/:id', upload.fields([
 ]), updateClientMaster);
 
 router.get('/', getClients);
+router.delete('/:id', deleteClientMaster);
 
 module.exports = router;

@@ -21,18 +21,18 @@ const storeClientMaster = async (req, res) => {
         } = req.body;
         const files = req.files;
 
-        // Auto-generate Client ID
-        const counter = await Counter.findByIdAndUpdate(
-            'clientId',
-            { $inc: { seq: 1 } },
-            { new: true, upsert: true }
-        );
-        const generatedClientId = `CLNT${String(counter.seq).padStart(6, '0')}`;
+        // Auto-generate Client ID (without separate Counter collection)
+        const lastClient = await ClientMaster.findOne({}, { clientId: 1 }).sort({ clientId: -1 });
+        let nextSeq = 1;
+        if (lastClient && lastClient.clientId) {
+            nextSeq = parseInt(lastClient.clientId) + 1;
+        }
+        const generatedClientId = String(nextSeq).padStart(4, '0');
 
         // Folder naming: clientName-clientId
         const namePart = (clientName || 'unknown_client').trim().replace(/[^a-z0-9]/gi, '_').toLowerCase();
         const idPart = generatedClientId.toLowerCase();
-        const folderName = `${namePart}-${idPart}`;
+        const folderName = idPart;
 
         // If folder created by multer (using req.body.clientId) is different, rename it
         const reqClientId = (req.body.clientId || '').toLowerCase();
@@ -41,7 +41,7 @@ const storeClientMaster = async (req, res) => {
             const nasBase = process.env.NAS_BASE_PATH || '/volume1/work';
             const localBase = process.env.LOCAL_BASE_PATH || './uploads';
             
-            const tempFolderName = `${namePart}-${reqClientId}`;
+            const tempFolderName = reqClientId;
             const absoluteLocalBase = path.isAbsolute(localBase) ? localBase : path.join(process.cwd(), localBase);
             const oldDir = path.join(absoluteLocalBase, 'client_master', tempFolderName);
             const newDir = path.join(absoluteLocalBase, 'client_master', folderName);
@@ -104,13 +104,8 @@ const updateClientMaster = async (req, res) => {
         } = req.body;
         const files = req.files;
 
-        const oldNamePart = oldRecord.clientName.trim().replace(/[^a-z0-9]/gi, '_').toLowerCase();
-        const oldIdPart = (oldRecord.clientId || '').toLowerCase();
-        const oldFolderName = oldIdPart ? `${oldNamePart}-${oldIdPart}` : oldNamePart;
-
-        const newNamePart = (clientName || oldRecord.clientName).trim().replace(/[^a-z0-9]/gi, '_').toLowerCase();
-        const newIdPart = oldIdPart;
-        const newFolderName = newIdPart ? `${newNamePart}-${newIdPart}` : newNamePart;
+        const oldFolderName = oldIdPart;
+        const newFolderName = oldIdPart;
 
         if (oldFolderName !== newFolderName) {
             const useNas = process.env.USE_NAS === 'true';
@@ -160,14 +155,19 @@ const updateClientMaster = async (req, res) => {
             return doc;
         };
 
-        oldRecord.clientName = clientName;
-        oldRecord.refNo = refNo;
-        oldRecord.email = email;
-        oldRecord.contactPerson = { name: contactPersonName, phone: contactPersonPhone };
-        oldRecord.panCard = panCard;
-        oldRecord.clientAddress = clientAddress;
-        oldRecord.gstNo = gstNo;
-        oldRecord.msmeNo = msmeNo;
+        if (clientName !== undefined) oldRecord.clientName = clientName;
+        if (refNo !== undefined) oldRecord.refNo = refNo;
+        if (email !== undefined) oldRecord.email = email;
+        if (contactPersonName !== undefined || contactPersonPhone !== undefined) {
+            oldRecord.contactPerson = {
+                name: contactPersonName !== undefined ? contactPersonName : oldRecord.contactPerson.name,
+                phone: contactPersonPhone !== undefined ? contactPersonPhone : oldRecord.contactPerson.phone
+            };
+        }
+        if (panCard !== undefined) oldRecord.panCard = panCard;
+        if (clientAddress !== undefined) oldRecord.clientAddress = clientAddress;
+        if (gstNo !== undefined) oldRecord.gstNo = gstNo;
+        if (msmeNo !== undefined) oldRecord.msmeNo = msmeNo;
 
         // Existing docs update paths
         oldRecord.documents = oldRecord.documents.map(doc => updateUrlPath(doc));
@@ -209,10 +209,31 @@ const getClients = async (req, res) => {
 
 const getNextClientId = async (req, res) => {
     try {
-        let counter = await Counter.findById('clientId');
-        let nextSeq = counter ? counter.seq + 1 : 1;
-        const nextId = `CLNT${String(nextSeq).padStart(6, '0')}`;
+        const lastClient = await ClientMaster.findOne({}, { clientId: 1 }).sort({ clientId: -1 });
+        let nextSeq = 1;
+        if (lastClient && lastClient.clientId) {
+            nextSeq = parseInt(lastClient.clientId) + 1;
+        }
+        const nextId = String(nextSeq).padStart(4, '0');
         res.json({ success: true, nextId });
+    } catch (error) {
+        res.status(500).json({ success: false, message: error.message });
+    }
+};
+
+const deleteClientMaster = async (req, res) => {
+    try {
+        const _id = req.params.id;
+        const record = await ClientMaster.findByIdAndDelete(_id);
+        if (!record) return res.status(404).json({ success: false, message: 'Client not found' });
+        
+        // Optional: Delete physical files if folder structure is ID-based
+        const folderPath = path.join(process.cwd(), 'uploads', 'client_master', record.clientId || '');
+        if (record.clientId && fs.existsSync(folderPath)) {
+            fs.rmSync(folderPath, { recursive: true, force: true });
+        }
+
+        res.json({ success: true, message: 'Client deleted successfully' });
     } catch (error) {
         res.status(500).json({ success: false, message: error.message });
     }
@@ -222,5 +243,6 @@ module.exports = {
     storeClientMaster,
     updateClientMaster,
     getClients,
-    getNextClientId
+    getNextClientId,
+    deleteClientMaster
 };

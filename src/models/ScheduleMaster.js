@@ -39,10 +39,15 @@ const ScheduleMasterSchema = new mongoose.Schema({
         type: String,
         trim: true
     },
+    dayStatus: {
+        type: String,
+        enum: ['scheduled', 'complete'],
+        default: 'scheduled'
+    },
     status: {
         type: String,
-        enum: ['scheduled', 'in-progress', 'completed', 'cancelled'],
-        default: 'scheduled'
+        enum: ['active', 'deactive'],
+        default: 'active'
     }
 }, { timestamps: true });
 

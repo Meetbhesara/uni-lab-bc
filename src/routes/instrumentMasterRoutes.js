@@ -49,10 +49,10 @@ const upload = multer({
     }
 });
 
-router.post('/',   upload.fields([{ name: 'photo', maxCount: 1 }]), storeInstrumentMaster);
+router.post('/',   upload.fields([{ name: 'photo', maxCount: 1 }, { name: 'photos', maxCount: 10 }]), storeInstrumentMaster);
 router.get('/',    getInstruments);
 router.get('/:id', getInstrumentById);
-router.put('/:id', upload.fields([{ name: 'photo', maxCount: 1 }]), updateInstrumentMaster);
+router.put('/:id', upload.fields([{ name: 'photo', maxCount: 1 }, { name: 'photos', maxCount: 10 }]), updateInstrumentMaster);
 router.delete('/:id', deleteInstrumentMaster);
 
 module.exports = router;
