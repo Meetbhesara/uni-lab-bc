@@ -17,13 +17,16 @@ const storage = multer.diskStorage({
         if (useNas === 'true') {
             // Append target subfolder to NAS base
             targetDir = path.join(nasBase, 'myapp', 'vehicle_master');
+            console.log('NAS MODE: targetDir is', targetDir);
         } else {
             // Append target subfolder to Local base
             const absoluteLocalBase = path.isAbsolute(localBase) ? localBase : path.join(process.cwd(), localBase);
             targetDir = path.join(absoluteLocalBase, 'vehicle_master');
+            console.log('LOCAL MODE: targetDir is', targetDir);
         }
 
         if (!fs.existsSync(targetDir)) {
+            console.log('Creating directory:', targetDir);
             fs.mkdirSync(targetDir, { recursive: true });
         }
         cb(null, targetDir);

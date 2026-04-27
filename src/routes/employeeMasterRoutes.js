@@ -19,12 +19,17 @@ const storage = multer.diskStorage({
         let targetDir;
         if (useNas === 'true') {
             targetDir = path.join(nasBase, 'myapp', 'employee_master', folderName);
+            console.log('NAS MODE: targetDir is', targetDir);
         } else {
             const absoluteLocalBase = path.isAbsolute(localBase) ? localBase : path.join(process.cwd(), localBase);
             targetDir = path.join(absoluteLocalBase, 'employee_master', folderName);
+            console.log('LOCAL MODE: targetDir is', targetDir);
         }
 
-        if (!fs.existsSync(targetDir)) fs.mkdirSync(targetDir, { recursive: true });
+        if (!fs.existsSync(targetDir)) {
+            console.log('Creating directory:', targetDir);
+            fs.mkdirSync(targetDir, { recursive: true });
+        }
         cb(null, targetDir);
     },
     filename: (req, file, cb) => {
