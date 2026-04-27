@@ -19,7 +19,7 @@ const storage = multer.diskStorage({
         const localBase = process.env.LOCAL_BASE_PATH || './uploads';
 
         let targetDir;
-        if (useNas) {
+        if (useNas === 'true') {
             targetDir = path.join(nasBase, 'myapp', 'instrument_master');
         } else {
             const absoluteLocalBase = path.isAbsolute(localBase)
