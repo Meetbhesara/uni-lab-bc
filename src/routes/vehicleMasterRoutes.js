@@ -16,7 +16,7 @@ const storage = multer.diskStorage({
         let targetDir;
         if (useNas === 'true') {
             // Append target subfolder to NAS base
-            targetDir = path.join(nasBase, 'myapp', 'vehicle_master');
+            targetDir = path.join(nasBase, 'vehicle_master');
             console.log('NAS MODE: targetDir is', targetDir);
         } else {
             // Append target subfolder to Local base

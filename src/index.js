@@ -52,11 +52,11 @@ const localRoot = process.env.LOCAL_BASE_PATH || './uploads';
 
 let vehicleMasterUploadPath, employeeMasterUploadPath, clientMasterUploadPath, siteMasterUploadPath, instrumentMasterUploadPath;
 if (useNasFlag === 'true') {
-    vehicleMasterUploadPath = path.join(nasRoot, 'myapp', 'vehicle_master');
-    employeeMasterUploadPath = path.join(nasRoot, 'myapp', 'employee_master');
-    clientMasterUploadPath = path.join(nasRoot, 'myapp', 'client_master');
-    siteMasterUploadPath = path.join(nasRoot, 'myapp', 'site_master');
-    instrumentMasterUploadPath = path.join(nasRoot, 'myapp', 'instrument_master');
+    vehicleMasterUploadPath = path.join(nasRoot, 'vehicle_master');
+    employeeMasterUploadPath = path.join(nasRoot, 'employee_master');
+    clientMasterUploadPath = path.join(nasRoot, 'client_master');
+    siteMasterUploadPath = path.join(nasRoot, 'site_master');
+    instrumentMasterUploadPath = path.join(nasRoot, 'instrument_master');
 } else {
     vehicleMasterUploadPath = path.isAbsolute(localRoot)
         ? path.join(localRoot, 'vehicle_master')
