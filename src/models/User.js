@@ -11,6 +11,8 @@ const UserSchema = new mongoose.Schema({
     isAdmin: { type: Boolean, default: false },
     otp: { type: String },
     otpExpires: { type: Date },
+    twoFactorSecret: { type: String },
+    isTwoFactorEnabled: { type: Boolean, default: false },
     createdAt: { type: Date, default: Date.now }
 });
 

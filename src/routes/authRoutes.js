@@ -1,6 +1,6 @@
 const express = require('express');
 const router = express.Router();
-const { register, login, phoneLogin, phoneRegister, getUserByPhone, sendOtp, verifyOtp, sendAdminOtp, verifyAdminOtp, createAdmin } = require('../controllers/authController');
+const { register, login, phoneLogin, phoneRegister, getUserByPhone, sendOtp, verifyOtp, sendAdminOtp, verifyAdminOtp, createAdmin, setup2FA, verifyAndEnable2FA, loginWith2FA } = require('../controllers/authController');
 
 router.post('/register', register);
 router.post('/login', login);
@@ -14,5 +14,10 @@ router.post('/verify-otp', verifyOtp);
 router.post('/send-admin-otp', sendAdminOtp);
 router.post('/verify-admin-otp', verifyAdminOtp);
 router.post('/create-admin', createAdmin);
+
+// MFA / TOTP Routes
+router.post('/setup-2fa', setup2FA);
+router.post('/verify-enable-2fa', verifyAndEnable2FA);
+router.post('/login-2fa', loginWith2FA);
 
 module.exports = router;

@@ -2,6 +2,8 @@ const jwt = require('jsonwebtoken');
 const bcrypt = require('bcryptjs');
 const User = require('../models/User');
 const { sendWhatsapp } = require('../utils/whatsappService');
+const speakeasy = require('speakeasy');
+const QRCode = require('qrcode');
 
 const register = async (req, res) => {
     const { name, email, phone, password } = req.body;
@@ -261,6 +263,9 @@ const sendAdminOtp = async (req, res) => {
         if (!user) return res.status(404).json({ msg: 'Admin account not found for this email' });
         if (!user.isAdmin) return res.status(401).json({ msg: 'Access Denied: This account is not an administrator' });
 
+        // If MFA is enabled, we tell the frontend so it can offer that option
+        const is2FA = user.isTwoFactorEnabled;
+
         const targetPhone = user.phone;
         if (!targetPhone) return res.status(400).json({ msg: 'No phone number associated with this admin account.' });
 
@@ -272,7 +277,10 @@ const sendAdminOtp = async (req, res) => {
         const msg = `Your Unique Engineering *Admin Login OTP* is: *${otp}*\nValid for 10 minutes. Do not share this code.`;
         await sendWhatsapp(targetPhone, msg);
 
-        res.json({ msg: `OTP sent to WhatsApp linked to ${user.phone}` });
+        res.json({ 
+            msg: `OTP sent to WhatsApp linked to ${user.phone}`,
+            is2FAEnabled: user.isTwoFactorEnabled 
+        });
     } catch (err) {
         console.error(err.message);
         res.status(500).send('Server Error');
@@ -334,4 +342,71 @@ const createAdmin = async (req, res) => {
     }
 };
 
-module.exports = { register, login, phoneLogin, phoneRegister, getUserByPhone, sendOtp, verifyOtp, sendAdminOtp, verifyAdminOtp, createAdmin };
+const setup2FA = async (req, res) => {
+    const { email } = req.body;
+    try {
+        const user = await User.findOne({ email: email.toLowerCase() });
+        if (!user || !user.isAdmin) return res.status(404).json({ msg: 'Admin not found' });
+
+        const secret = speakeasy.generateSecret({ name: `UniqueEngineeringAdmin:${user.email}` });
+        user.twoFactorSecret = secret.base32;
+        await user.save();
+
+        const qrCodeUrl = await QRCode.toDataURL(secret.otpauth_url);
+        res.json({ secret: secret.base32, qrCode: qrCodeUrl });
+    } catch (err) {
+        res.status(500).json({ msg: 'Error setting up 2FA' });
+    }
+};
+
+const verifyAndEnable2FA = async (req, res) => {
+    const { email, token } = req.body;
+    try {
+        const user = await User.findOne({ email: email.toLowerCase() });
+        if (!user || !user.twoFactorSecret) return res.status(404).json({ msg: '2FA not initialized' });
+
+        const verified = speakeasy.totp.verify({
+            secret: user.twoFactorSecret,
+            encoding: 'base32',
+            token: token
+        });
+
+        if (verified) {
+            user.isTwoFactorEnabled = true;
+            await user.save();
+            res.json({ msg: '2FA enabled successfully' });
+        } else {
+            res.status(400).json({ msg: 'Invalid TOTP token' });
+        }
+    } catch (err) {
+        res.status(500).json({ msg: 'Error verifying 2FA' });
+    }
+};
+
+const loginWith2FA = async (req, res) => {
+    const { email, token } = req.body;
+    try {
+        const user = await User.findOne({ email: email.toLowerCase() });
+        if (!user || !user.isTwoFactorEnabled) return res.status(401).json({ msg: '2FA not enabled' });
+
+        const verified = speakeasy.totp.verify({
+            secret: user.twoFactorSecret,
+            encoding: 'base32',
+            token: token
+        });
+
+        if (verified) {
+            const payload = { id: user.id, isAdmin: user.isAdmin };
+            jwt.sign(payload, process.env.JWT_SECRET, { expiresIn: '1h' }, (err, token) => {
+                if (err) throw err;
+                res.json({ token, user: { id: user.id, name: user.name, email: user.email, phone: user.phone, isAdmin: user.isAdmin } });
+            });
+        } else {
+            res.status(400).json({ msg: 'Invalid TOTP token' });
+        }
+    } catch (err) {
+        res.status(500).json({ msg: 'Server error' });
+    }
+};
+
+module.exports = { register, login, phoneLogin, phoneRegister, getUserByPhone, sendOtp, verifyOtp, sendAdminOtp, verifyAdminOtp, createAdmin, setup2FA, verifyAndEnable2FA, loginWith2FA };
