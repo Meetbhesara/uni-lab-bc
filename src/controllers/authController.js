@@ -274,12 +274,22 @@ const sendAdminOtp = async (req, res) => {
         user.otpExpires = Date.now() + 10 * 60 * 1000; // 10 minutes
         await user.save();
 
-        const msg = `Your Unique Engineering *Admin Login OTP* is: *${otp}*\nValid for 10 minutes. Do not share this code.`;
-        await sendWhatsapp(targetPhone, msg);
+        let whatsappStatus = 'sent';
+        try {
+            const msg = `Your Unique Engineering *Admin Login OTP* is: *${otp}*\nValid for 10 minutes. Do not share this code.`;
+            await sendWhatsapp(targetPhone, msg);
+        } catch (wsErr) {
+            console.error('WhatsApp Send Failure:', wsErr.message);
+            whatsappStatus = 'failed';
+        }
 
         res.json({ 
-            msg: `OTP sent to WhatsApp linked to ${user.phone}`,
-            is2FAEnabled: user.isTwoFactorEnabled 
+            success: true,
+            msg: whatsappStatus === 'sent' 
+                ? `OTP sent to WhatsApp linked to ${user.phone}`
+                : `WhatsApp service is currently offline. You can use Google Authenticator if enabled, or try again later.`,
+            is2FAEnabled: user.isTwoFactorEnabled,
+            whatsappStatus
         });
     } catch (err) {
         console.error(err.message);
