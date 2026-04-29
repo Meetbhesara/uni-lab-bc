@@ -10,12 +10,12 @@ const storage = multer.diskStorage({
     destination: (req, file, cb) => {
         // Use flag from .env to decide storage mode
         const useNas = process.env.USE_NAS;
-        const nasBase = process.env.NAS_BASE_PATH || '/volume1/work';
+        let nasBase = process.env.NAS_BASE_PATH || '/app/storage';
+        if (useNas === 'true' && !nasBase.startsWith('/')) nasBase = '/' + nasBase;
         const localBase = process.env.LOCAL_BASE_PATH || './uploads';
 
         let targetDir;
         if (useNas === 'true') {
-            // Append target subfolder to NAS base
             targetDir = path.join(nasBase, 'vehicle_master');
             console.log('NAS MODE: targetDir is', targetDir);
         } else {

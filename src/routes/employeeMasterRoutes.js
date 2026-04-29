@@ -9,7 +9,8 @@ const { storeEmployeeMaster, updateEmployeeMaster, getEmployees, getNextEmpId, d
 const storage = multer.diskStorage({
     destination: (req, file, cb) => {
         const useNas = process.env.USE_NAS;
-        const nasBase = process.env.NAS_BASE_PATH || '/volume1/work';
+        let nasBase = process.env.NAS_BASE_PATH || '/app/storage';
+        if (useNas === 'true' && !nasBase.startsWith('/')) nasBase = '/' + nasBase;
         const localBase = process.env.LOCAL_BASE_PATH || './uploads';
 
         const namePart = (req.body.name || 'unknown').trim().replace(/[^a-z0-9]/gi, '_').toLowerCase();
@@ -18,7 +19,7 @@ const storage = multer.diskStorage({
 
         let targetDir;
         if (useNas === 'true') {
-            targetDir = path.join(nasBase, 'myapp', 'employee_master', folderName);
+            targetDir = path.join(nasBase, 'employee_master', folderName);
             console.log('NAS MODE: targetDir is', targetDir);
         } else {
             const absoluteLocalBase = path.isAbsolute(localBase) ? localBase : path.join(process.cwd(), localBase);

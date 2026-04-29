@@ -30,7 +30,8 @@ router.get('/by-client/:clientId', async (req, res) => {
 const storage = multer.diskStorage({
     destination: (req, file, cb) => {
         const useNas = process.env.USE_NAS === 'true';
-        const nasBase = process.env.NAS_BASE_PATH || '/volume1/work';
+        let nasBase = process.env.NAS_BASE_PATH || '/app/storage';
+        if (useNas && !nasBase.startsWith('/')) nasBase = '/' + nasBase;
         const localBase = process.env.LOCAL_BASE_PATH || './uploads';
 
         // Sanitize site name for folder naming

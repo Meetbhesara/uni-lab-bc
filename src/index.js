@@ -47,7 +47,11 @@ app.use('/api/employee-expense', employeeExpenseRoutes);
 
 // Dynamically serve vehicle-master documents based on USE_NAS flag
 const useNasFlag = process.env.USE_NAS;
-const nasRoot = process.env.NAS_BASE_PATH || '/volume1/work';
+let nasRoot = process.env.NAS_BASE_PATH || '/app/storage';
+// Ensure nasRoot is absolute if using NAS
+if (useNasFlag === 'true' && !nasRoot.startsWith('/')) {
+    nasRoot = '/' + nasRoot;
+}
 const localRoot = process.env.LOCAL_BASE_PATH || './uploads';
 
 let vehicleMasterUploadPath, employeeMasterUploadPath, clientMasterUploadPath, siteMasterUploadPath, instrumentMasterUploadPath;
@@ -74,6 +78,31 @@ if (useNasFlag === 'true') {
         ? path.join(localRoot, 'instrument_master')
         : path.join(process.cwd(), localRoot, 'instrument_master');
 }
+
+// Initialize and Ensure Directories Exist
+const ensureDirectories = () => {
+    const dirs = [
+        vehicleMasterUploadPath,
+        employeeMasterUploadPath,
+        clientMasterUploadPath,
+        siteMasterUploadPath,
+        instrumentMasterUploadPath,
+        path.join(process.cwd(), 'uploads'),
+        path.join(process.cwd(), 'whatsapp_auth')
+    ];
+
+    dirs.forEach(dir => {
+        if (!fs.existsSync(dir)) {
+            try {
+                fs.mkdirSync(dir, { recursive: true });
+                console.log(`✅ Directory initialized: ${dir}`);
+            } catch (err) {
+                console.error(`❌ Failed to create directory ${dir}:`, err.message);
+            }
+        }
+    });
+};
+ensureDirectories();
 
 app.use('/uploads/vehicle_master', exprees.static(vehicleMasterUploadPath));
 app.use('/uploads/employee_master', exprees.static(employeeMasterUploadPath));
