@@ -8,6 +8,7 @@ app.use(cors());
 connectDB();
 
 app.use('/uploads', exprees.static('uploads'));
+app.use('/api/uploads', exprees.static('uploads'));
 app.use(exprees.json({ extended: false }));
 
 const productRoutes = require('./routes/productRoutes');
@@ -105,10 +106,19 @@ const ensureDirectories = () => {
 ensureDirectories();
 
 app.use('/uploads/vehicle_master', exprees.static(vehicleMasterUploadPath));
+app.use('/api/uploads/vehicle_master', exprees.static(vehicleMasterUploadPath));
+
 app.use('/uploads/employee_master', exprees.static(employeeMasterUploadPath));
+app.use('/api/uploads/employee_master', exprees.static(employeeMasterUploadPath));
+
 app.use('/uploads/client_master', exprees.static(clientMasterUploadPath));
+app.use('/api/uploads/client_master', exprees.static(clientMasterUploadPath));
+
 app.use('/uploads/site_master', exprees.static(siteMasterUploadPath));
+app.use('/api/uploads/site_master', exprees.static(siteMasterUploadPath));
+
 app.use('/uploads/instrument_master', exprees.static(instrumentMasterUploadPath));
+app.use('/api/uploads/instrument_master', exprees.static(instrumentMasterUploadPath));
 
 // Serve local infrastructure images from configured assets root
 const ASSETS_ROOT = process.env.ASSETS_ROOT_PATH || 'D:/';
