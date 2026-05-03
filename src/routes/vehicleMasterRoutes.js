@@ -14,14 +14,15 @@ const storage = multer.diskStorage({
         if (useNas === 'true' && !nasBase.startsWith('/')) nasBase = '/' + nasBase;
         const localBase = process.env.LOCAL_BASE_PATH || './uploads';
 
+        const vehicleNum = (req.body.vehicleNumber || 'unknown').trim().replace(/[^a-z0-9]/gi, '_').toLowerCase();
+
         let targetDir;
         if (useNas === 'true') {
-            targetDir = path.join(nasBase, 'vehicle_master');
+            targetDir = path.join(nasBase, 'vehicle_master', vehicleNum);
             console.log('NAS MODE: targetDir is', targetDir);
         } else {
-            // Append target subfolder to Local base
             const absoluteLocalBase = path.isAbsolute(localBase) ? localBase : path.join(process.cwd(), localBase);
-            targetDir = path.join(absoluteLocalBase, 'vehicle_master');
+            targetDir = path.join(absoluteLocalBase, 'vehicle_master', vehicleNum);
             console.log('LOCAL MODE: targetDir is', targetDir);
         }
 
@@ -37,7 +38,7 @@ const storage = multer.diskStorage({
     }
 });
 
-const upload = multer({ 
+const upload = multer({
     storage,
     limits: { fileSize: 5 * 1024 * 1024 }, // 5MB limit
     fileFilter: (req, file, cb) => {

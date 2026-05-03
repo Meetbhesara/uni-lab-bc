@@ -13,6 +13,7 @@ const UserSchema = new mongoose.Schema({
     otpExpires: { type: Date },
     twoFactorSecret: { type: String },
     isTwoFactorEnabled: { type: Boolean, default: false },
+    backupCodes: [{ type: String }],
     createdAt: { type: Date, default: Date.now }
 });
 

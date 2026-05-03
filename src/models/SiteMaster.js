@@ -1,6 +1,10 @@
 const mongoose = require('mongoose');
 
 const SiteMasterSchema = new mongoose.Schema({
+    siteId: {
+        type: String,
+        unique: true
+    },
     client: {
         type: mongoose.Schema.Types.ObjectId,
         ref: 'ClientMaster'

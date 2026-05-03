@@ -27,7 +27,7 @@ const storeClientMaster = async (req, res) => {
         if (lastClient && lastClient.clientId) {
             nextSeq = parseInt(lastClient.clientId) + 1;
         }
-        const generatedClientId = String(nextSeq).padStart(4, '0');
+        const generatedClientId = String(nextSeq).padStart(5, '0');
 
         // Folder naming: clientName-clientId
         const namePart = (clientName || 'unknown_client').trim().replace(/[^a-z0-9]/gi, '_').toLowerCase();
@@ -104,6 +104,7 @@ const updateClientMaster = async (req, res) => {
         } = req.body;
         const files = req.files;
 
+        const oldIdPart = (oldRecord.clientId || '').toLowerCase();
         const oldFolderName = oldIdPart;
         const newFolderName = oldIdPart;
 
@@ -214,7 +215,7 @@ const getNextClientId = async (req, res) => {
         if (lastClient && lastClient.clientId) {
             nextSeq = parseInt(lastClient.clientId) + 1;
         }
-        const nextId = String(nextSeq).padStart(4, '0');
+        const nextId = String(nextSeq).padStart(5, '0');
         res.json({ success: true, nextId });
     } catch (error) {
         res.status(500).json({ success: false, message: error.message });

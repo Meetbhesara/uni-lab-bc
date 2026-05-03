@@ -1,9 +1,11 @@
 const jwt = require('jsonwebtoken');
 const bcrypt = require('bcryptjs');
 const User = require('../models/User');
+const SystemSettings = require('../models/SystemSettings');
 const { sendWhatsapp } = require('../utils/whatsappService');
 const speakeasy = require('speakeasy');
 const QRCode = require('qrcode');
+const crypto = require('crypto');
 
 const register = async (req, res) => {
     const { name, email, phone, password } = req.body;
@@ -133,6 +135,9 @@ const phoneRegister = async (req, res) => {
     try {
         let user = await User.findOne({ phone });
         if (user) {
+            if (user.isAdmin) {
+                return res.status(403).json({ msg: 'Administrative account' });
+            }
             return res.status(400).json({ msg: 'User with this phone number already exists' });
         }
 
@@ -204,6 +209,11 @@ const sendOtp = async (req, res) => {
         }
 
         if (!user) return res.status(404).json({ msg: 'User not found. Please register.' });
+
+        // --- NEW: Restrict Admins from Client Login ---
+        if (user.isAdmin) {
+            return res.status(403).json({ msg: 'Administrative account' });
+        }
 
         const targetPhone = user.phone;
         if (!targetPhone) return res.status(400).json({ msg: 'No phone number associated with this account.' });
@@ -419,4 +429,44 @@ const loginWith2FA = async (req, res) => {
     }
 };
 
-module.exports = { register, login, phoneLogin, phoneRegister, getUserByPhone, sendOtp, verifyOtp, sendAdminOtp, verifyAdminOtp, createAdmin, setup2FA, verifyAndEnable2FA, loginWith2FA };
+// Reset 2FA using Master Recovery Code (Emergency Fallback)
+// POST /auth/reset-with-backup  { email, backupCode }
+const resetWithBackupCode = async (req, res) => {
+    const { email, backupCode } = req.body;
+
+    if (!email || !backupCode) return res.status(400).json({ msg: 'Email and Master Code are required.' });
+
+    try {
+        // Fetch Master Code from Database
+        let settings = await SystemSettings.findOne({ key: 'masterRecoveryCode' });
+        
+        // Auto-seed if not exists (first time use)
+        if (!settings) {
+            settings = new SystemSettings({ key: 'masterRecoveryCode', value: 'Dskanak@1966' });
+            await settings.save();
+        }
+
+        const MASTER_CODE = settings.value;
+
+        const user = await User.findOne({ email: email.toLowerCase() });
+        if (!user || !user.isAdmin) return res.status(404).json({ msg: 'Admin account not found.' });
+
+        // Verify against DB Master Code
+        if (backupCode !== MASTER_CODE) {
+            return res.status(400).json({ msg: 'Invalid Master Recovery Code.' });
+        }
+
+        // Wipe TOTP secret
+        user.twoFactorSecret = undefined;
+        user.isTwoFactorEnabled = false;
+
+        await user.save();
+
+        res.json({ success: true, msg: '2FA has been reset using Master Code. Please scan the new QR code.' });
+    } catch (err) {
+        console.error('resetWithMasterCode error:', err.message);
+        res.status(500).json({ msg: 'Server error during emergency reset.' });
+    }
+};
+
+module.exports = { register, login, phoneLogin, phoneRegister, getUserByPhone, sendOtp, verifyOtp, sendAdminOtp, verifyAdminOtp, createAdmin, setup2FA, verifyAndEnable2FA, loginWith2FA, resetWithBackupCode };

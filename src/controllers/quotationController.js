@@ -33,7 +33,9 @@ const getNextRefNo = async () => {
 const User = require('../models/User'); // Import User model
 
 const createQuotation = async (req, res) => {
+    console.log('--- Create Quotation Request Received ---');
     try {
+        console.log("1. Request Body:", req.body);
         const { 
             enquiryId, items, status, pdfPath, htmlContent, nextFollowUp, packaging, packagingGst, discount,
             partyName, contactPerson, email, phone, gstNumber // New party details for potential correction
@@ -67,17 +69,15 @@ const createQuotation = async (req, res) => {
 
         // Also update or create the User record based on the email provided
         const finalEmail = email || enquiry.email;
+        console.log("2. finalEmail is:", finalEmail);
+        console.log("3. Condition met:", (finalEmail && finalEmail !== 'N/A'));
+
         if (finalEmail && finalEmail !== 'N/A') {
             try {
-                let user = await User.findOne({ email: finalEmail });
-                if (user) {
-                    if (partyName) user.companyName = partyName;
-                    if (contactPerson) user.contactPersonName = contactPerson;
-                    if (phone) user.phone = phone;
-                    if (gstNumber) user.gstNumber = gstNumber;
-                    user.name = contactPerson || partyName || user.name;
-                    await user.save();
-                } else if (phone && phone !== 'N/A') {
+                console.log("4. Searching for user with phone:", phone);
+                let user = await User.findOne({ phone: phone });
+                console.log("5. User found:", user);
+                if (!user && phone && phone !== 'N/A') {
                     // Create minimal user if not exists
                     user = new User({
                         email: finalEmail,

@@ -35,14 +35,6 @@ router.post('/', async (req, res) => {
                 name: contactPersonName || companyName || 'Client'
             });
             await user.save();
-        } else {
-            // Update existing user with new details just in case
-            if (companyName) user.companyName = companyName;
-            if (contactPersonName) user.contactPersonName = contactPersonName;
-            if (phone) user.phone = phone;
-            if (gstNumber) user.gstNumber = gstNumber;
-            user.name = contactPersonName || companyName || user.name;
-            await user.save();
         }
 
         // 3. Create Enquiry

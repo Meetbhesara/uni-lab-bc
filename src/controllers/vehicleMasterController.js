@@ -13,41 +13,42 @@ const storeVehicleMaster = async (req, res) => {
         const documents = [];
 
         // Distinguish specific files and generic documents
+        const folderName = (vehicleNumber || 'unknown').trim().replace(/[^a-z0-9]/gi, '_').toLowerCase();
         if (files) {
             if (files.rcBook) {
                 const f = Array.isArray(files.rcBook) ? files.rcBook[0] : files.rcBook;
-                rcBookData = { name: f.originalname, url: `/uploads/vehicle_master/${path.basename(f.path)}`, path: f.path };
+                rcBookData = { name: f.originalname, url: `/uploads/vehicle_master/${folderName}/${path.basename(f.path)}`, path: f.path };
             }
             if (files.insurancePhoto) {
                 const f = Array.isArray(files.insurancePhoto) ? files.insurancePhoto[0] : files.insurancePhoto;
-                insurancePhotoData = { name: f.originalname, url: `/uploads/vehicle_master/${path.basename(f.path)}`, path: f.path };
+                insurancePhotoData = { name: f.originalname, url: `/uploads/vehicle_master/${folderName}/${path.basename(f.path)}`, path: f.path };
             }
             if (files.pucPhoto) {
                 const f = Array.isArray(files.pucPhoto) ? files.pucPhoto[0] : files.pucPhoto;
-                pucPhotoData = { name: f.originalname, url: `/uploads/vehicle_master/${path.basename(f.path)}`, path: f.path };
+                pucPhotoData = { name: f.originalname, url: `/uploads/vehicle_master/${folderName}/${path.basename(f.path)}`, path: f.path };
             }
             if (files.vehiclePhotos) {
                 const flist = Array.isArray(files.vehiclePhotos) ? files.vehiclePhotos : [files.vehiclePhotos];
-                flist.forEach(f => vehiclePhotos.push({ name: f.originalname, url: `/uploads/vehicle_master/${path.basename(f.path)}`, path: f.path }));
+                flist.forEach(f => vehiclePhotos.push({ name: f.originalname, url: `/uploads/vehicle_master/${folderName}/${path.basename(f.path)}`, path: f.path }));
             }
             if (files.documents) {
                 const flist = Array.isArray(files.documents) ? files.documents : [files.documents];
-                flist.forEach(f => documents.push({ name: f.originalname, url: `/uploads/vehicle_master/${path.basename(f.path)}`, path: f.path }));
+                flist.forEach(f => documents.push({ name: f.originalname, url: `/uploads/vehicle_master/${folderName}/${path.basename(f.path)}`, path: f.path }));
             }
         }
 
-        const record = new VehicleMaster({ 
-            vehicleNumber, 
-            vehicleName, 
-            insuranceDate, 
-            pucDate, 
-            serviceDate, 
-            logInName, 
+        const record = new VehicleMaster({
+            vehicleNumber,
+            vehicleName,
+            insuranceDate,
+            pucDate,
+            serviceDate,
+            logInName,
             rcBook: rcBookData,
             insurancePhoto: insurancePhotoData,
             pucPhoto: pucPhotoData,
             vehiclePhotos,
-            documents 
+            documents
         });
         await record.save();
         res.status(201).json({ success: true, message: 'Saved successfully', data: record });
@@ -88,25 +89,26 @@ const updateVehicleMaster = async (req, res) => {
         if (logInName !== undefined) record.logInName = logInName;
 
         if (files) {
+            const folderName = (record.vehicleNumber || 'unknown').trim().replace(/[^a-z0-9]/gi, '_').toLowerCase();
             if (files.rcBook) {
                 const f = Array.isArray(files.rcBook) ? files.rcBook[0] : files.rcBook;
-                record.rcBook = { name: f.originalname, url: `/uploads/vehicle_master/${path.basename(f.path)}`, path: f.path };
+                record.rcBook = { name: f.originalname, url: `/uploads/vehicle_master/${folderName}/${path.basename(f.path)}`, path: f.path };
             }
             if (files.insurancePhoto) {
                 const f = Array.isArray(files.insurancePhoto) ? files.insurancePhoto[0] : files.insurancePhoto;
-                record.insurancePhoto = { name: f.originalname, url: `/uploads/vehicle_master/${path.basename(f.path)}`, path: f.path };
+                record.insurancePhoto = { name: f.originalname, url: `/uploads/vehicle_master/${folderName}/${path.basename(f.path)}`, path: f.path };
             }
             if (files.pucPhoto) {
                 const f = Array.isArray(files.pucPhoto) ? files.pucPhoto[0] : files.pucPhoto;
-                record.pucPhoto = { name: f.originalname, url: `/uploads/vehicle_master/${path.basename(f.path)}`, path: f.path };
+                record.pucPhoto = { name: f.originalname, url: `/uploads/vehicle_master/${folderName}/${path.basename(f.path)}`, path: f.path };
             }
             if (files.vehiclePhotos) {
                 const flist = Array.isArray(files.vehiclePhotos) ? files.vehiclePhotos : [files.vehiclePhotos];
-                flist.forEach(f => record.vehiclePhotos.push({ name: f.originalname, url: `/uploads/vehicle_master/${path.basename(f.path)}`, path: f.path }));
+                flist.forEach(f => record.vehiclePhotos.push({ name: f.originalname, url: `/uploads/vehicle_master/${folderName}/${path.basename(f.path)}`, path: f.path }));
             }
             if (files.documents) {
                 const flist = Array.isArray(files.documents) ? files.documents : [files.documents];
-                flist.forEach(f => record.documents.push({ name: f.originalname, url: `/uploads/vehicle_master/${path.basename(f.path)}`, path: f.path }));
+                flist.forEach(f => record.documents.push({ name: f.originalname, url: `/uploads/vehicle_master/${folderName}/${path.basename(f.path)}`, path: f.path }));
             }
         }
 
@@ -122,9 +124,9 @@ const deleteVehicleMaster = async (req, res) => {
         const _id = req.params.id;
         const record = await VehicleMaster.findByIdAndDelete(_id);
         if (!record) return res.status(404).json({ success: false, message: 'Vehicle not found' });
-        
+
         // Logical deletion of files could be added here if needed
-        
+
         res.json({ success: true, message: 'Vehicle deleted successfully' });
     } catch (error) {
         res.status(500).json({ success: false, message: error.message });

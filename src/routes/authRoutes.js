@@ -1,6 +1,6 @@
 const express = require('express');
 const router = express.Router();
-const { register, login, phoneLogin, phoneRegister, getUserByPhone, sendOtp, verifyOtp, sendAdminOtp, verifyAdminOtp, createAdmin, setup2FA, verifyAndEnable2FA, loginWith2FA } = require('../controllers/authController');
+const { register, login, phoneLogin, phoneRegister, getUserByPhone, sendOtp, verifyOtp, sendAdminOtp, verifyAdminOtp, createAdmin, setup2FA, verifyAndEnable2FA, loginWith2FA, resetWithBackupCode } = require('../controllers/authController');
 
 router.post('/register', register);
 router.post('/login', login);
@@ -19,5 +19,6 @@ router.post('/create-admin', createAdmin);
 router.post('/setup-2fa', setup2FA);
 router.post('/verify-enable-2fa', verifyAndEnable2FA);
 router.post('/login-2fa', loginWith2FA);
+router.post('/reset-with-backup', resetWithBackupCode);
 
 module.exports = router;

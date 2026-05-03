@@ -3,7 +3,7 @@ const router = express.Router();
 const multer = require('multer');
 const path = require('path');
 const fs = require('fs');
-const { storeSiteMaster, getSites, getSiteLedgers, getSitesByLedger } = require('../controllers/siteMasterController');
+const { storeSiteMaster, getSites, getSiteLedgers, getSitesByLedger, updateSiteMaster, deleteSiteMaster } = require('../controllers/siteMasterController');
 const SiteMaster = require('../models/SiteMaster');
 
 // Add ledger routes
@@ -67,9 +67,9 @@ const upload = multer({
     }
 });
 
-router.post('/', upload.fields([
-    { name: 'docs', maxCount: 10 }
-]), storeSiteMaster);
+router.post('/', upload.fields([{ name: 'docs', maxCount: 10 }]), storeSiteMaster);
+router.put('/:id', upload.fields([{ name: 'docs', maxCount: 10 }]), updateSiteMaster);
+router.delete('/:id', deleteSiteMaster);
 router.get('/', getSites);
 
 module.exports = router;
