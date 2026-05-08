@@ -22,7 +22,7 @@ const storeSiteMaster = async (req, res) => {
 
         const prefix = `${clientShortId}-`;
         const sitesWithPrefix = await SiteMaster.find({ siteId: { $regex: `^${prefix}` } });
-        
+
         let nextSeq = 1;
         if (sitesWithPrefix.length > 0) {
             const maxSuffix = Math.max(...sitesWithPrefix.map(s => {
@@ -38,7 +38,8 @@ const storeSiteMaster = async (req, res) => {
         const useNas = process.env.USE_NAS;
         const nasBase = process.env.NAS_BASE_PATH || '/app/storage';
         const localBase = process.env.LOCAL_BASE_PATH || './uploads';
-        const siteSubfolder = (siteName || 'unknown_site').trim().replace(/[^a-z0-9]/gi, '_').toLowerCase();
+        const sanitizedSiteName = (siteName || 'unknown_site').trim().replace(/[^a-z0-9]/gi, '_').toLowerCase();
+        const siteSubfolder = `${generatedSiteId}-${sanitizedSiteName}`;
 
         let targetDir;
         const cId = clientShortId.toLowerCase();
@@ -70,14 +71,14 @@ const storeSiteMaster = async (req, res) => {
             flist.forEach(f => {
                 documents.push({
                     name: f.originalname,
-                    url: `/uploads/client_master/${clientShortId.toLowerCase()}/site_master/${siteSubfolder}/${subfolder}/${path.basename(f.path)}`,
+                    url: `/uploads/client_master/${clientShortId.toLowerCase()}/site_master/${siteSubfolder}/${subfolder ? subfolder + '/' : ''}${path.basename(f.path)}`,
                     path: f.path
                 });
             });
         };
 
         if (files) {
-            processFiles(files.docs, 'data');
+            processFiles(files.docs, '');
             processFiles(files.photos, 'photos');
             processFiles(files.dailyReports, 'Daily_report');
         }
@@ -87,7 +88,7 @@ const storeSiteMaster = async (req, res) => {
         try {
             if (contactPersons) parsedContactPersons = typeof contactPersons === 'string' ? JSON.parse(contactPersons) : contactPersons;
             if (ledgerItems) parsedLedgerItems = typeof ledgerItems === 'string' ? JSON.parse(ledgerItems) : ledgerItems;
-        } catch(e) { console.error('Parse error for arrays:', e); }
+        } catch (e) { console.error('Parse error for arrays:', e); }
 
         const record = new SiteMaster({
             siteId: generatedSiteId,
@@ -183,21 +184,22 @@ const updateSiteMaster = async (req, res) => {
             // Fetch client data to get shortId for URL
             const clientData = await ClientMaster.findById(site.client);
             const clientShortId = (clientData && clientData.clientId) ? clientData.clientId.toLowerCase() : 'unknown_client';
-            const siteSubfolder = (site.siteName || 'unknown_site').trim().replace(/[^a-z0-9]/gi, '_').toLowerCase();
-            
+            const sanitizedSiteName = (site.siteName || 'unknown_site').trim().replace(/[^a-z0-9]/gi, '_').toLowerCase();
+            const siteSubfolder = `${site.siteId}-${sanitizedSiteName}`;
+
             const processUpdateFiles = (fieldFiles, subfolder) => {
                 if (!fieldFiles) return;
                 const flist = Array.isArray(fieldFiles) ? fieldFiles : [fieldFiles];
                 flist.forEach(f => {
                     site.documents.push({
                         name: f.originalname,
-                        url: `/uploads/client_master/${clientShortId}/site_master/${siteSubfolder}/${subfolder}/${path.basename(f.path)}`,
+                        url: `/uploads/client_master/${clientShortId}/site_master/${siteSubfolder}/${subfolder ? subfolder + '/' : ''}${path.basename(f.path)}`,
                         path: f.path
                     });
                 });
             };
 
-            processUpdateFiles(files.docs, 'data');
+            processUpdateFiles(files.docs, '');
             processUpdateFiles(files.photos, 'photos');
             processUpdateFiles(files.dailyReports, 'Daily_report');
         }
@@ -229,6 +231,7 @@ const getNextSiteId = async (req, res) => {
         const clientData = await ClientMaster.findById(clientId);
         if (!clientData) return res.status(404).json({ success: false, message: 'Client not found' });
 
+        const clientShortId = clientData.clientId || '00000';
         const prefix = `${clientShortId}-`;
         const sitesWithPrefix = await SiteMaster.find({ siteId: { $regex: `^${prefix}` } });
 

@@ -48,16 +48,17 @@ const storage = multer.diskStorage({
                 }
             }
 
-            // Sanitize site name for folder naming
-            const siteName = (req.body.siteName || 'unknown_site').trim().replace(/[^a-z0-9]/gi, '_').toLowerCase();
+            // Sanitize site name and combine with siteId for folder naming
+            const siteId = req.body.siteId || 'unknown_id';
+            const siteNamePart = (req.body.siteName || 'unknown_site').trim().replace(/[^a-z0-9]/gi, '_').toLowerCase();
+            const siteSubfolder = `${siteId}-${siteNamePart}`;
 
             let targetDir;
             if (useNas) {
-                // Structure: client_master/[clientId]/site_master/[siteName]
-                targetDir = path.join(nasBase, 'client_master', clientShortId, 'site_master', siteName);
+                targetDir = path.join(nasBase, 'client_master', clientShortId, 'site_master', siteSubfolder);
             } else {
                 const absoluteLocalBase = path.isAbsolute(localBase) ? localBase : path.join(process.cwd(), localBase);
-                targetDir = path.join(absoluteLocalBase, 'client_master', clientShortId, 'site_master', siteName);
+                targetDir = path.join(absoluteLocalBase, 'client_master', clientShortId, 'site_master', siteSubfolder);
             }
 
             if (!fs.existsSync(targetDir)) fs.mkdirSync(targetDir, { recursive: true });
@@ -73,7 +74,8 @@ const storage = multer.diskStorage({
             let sub = 'data'; // default
             if (file.fieldname === 'photos') sub = 'photos';
             else if (file.fieldname === 'dailyReports') sub = 'Daily_report';
-            else if (file.fieldname === 'data' || file.fieldname === 'docs') sub = 'data';
+            else if (file.fieldname === 'data') sub = 'data';
+            else if (file.fieldname === 'docs') sub = ''; // Store directly in targetDir
 
             cb(null, path.join(targetDir, sub));
         } catch (err) {
@@ -87,7 +89,7 @@ const storage = multer.diskStorage({
     }
 });
 
-const upload = multer({ 
+const upload = multer({
     storage,
     limits: { fileSize: 10 * 1024 * 1024 }, // 10MB limit for site docs
     fileFilter: (req, file, cb) => {
