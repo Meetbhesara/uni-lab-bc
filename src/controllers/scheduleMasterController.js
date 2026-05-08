@@ -3,12 +3,12 @@ const ScheduleMaster = require('../models/ScheduleMaster');
 // POST - Create a new schedule
 const createSchedule = async (req, res) => {
     try {
-        const { client, site, scheduleDate, workForAppley, operativeNames, helpers, notes, status, dayStatus } = req.body;
+        const { client, site, scheduleDate, workForAppley, operative, helpers, notes, status, dayStatus, ledger, amount } = req.body;
 
-        if (!client || !site || !scheduleDate) {
+        if (!client || !site || !scheduleDate || !operative) {
             return res.status(400).json({
                 success: false,
-                message: 'Client, site, and schedule date are required'
+                message: 'Client, site, schedule date, and operative are required'
             });
         }
 
@@ -16,20 +16,21 @@ const createSchedule = async (req, res) => {
             client,
             site,
             scheduleDate,
-            ...(workForAppley && { workForAppley }),
-            ...(operativeNames && { operativeNames }),
-            ...(helpers && { helpers }),
-            ...(notes && { notes }),
-            ...(status && { status }),
-            ...(dayStatus && { dayStatus })
+            workForAppley,
+            operative,
+            helpers: helpers || [],
+            ledger,
+            amount,
+            notes,
+            status: status || 'Active',
+            dayStatus: dayStatus || 'Scheduled'
         });
 
         await schedule.save();
         const populated = await ScheduleMaster.findById(schedule._id)
-            .populate('client', 'clientName')
-            .populate('site', 'siteName siteAddress')
-            .populate('operativeNames', 'name phone')
-            .populate('operativeName', 'name phone')
+            .populate('client', 'clientName clientId')
+            .populate('site', 'siteName siteAddress ledgerItems')
+            .populate('operative', 'name phone')
             .populate('helpers', 'name phone');
 
         res.status(201).json({ success: true, message: 'Schedule created successfully', data: populated });
@@ -46,7 +47,7 @@ const updateSchedule = async (req, res) => {
         // Only update fields that are actually provided
         const updates = {};
         const unsets = {};
-        const allowedFields = ['client', 'site', 'scheduleDate', 'workForAppley', 'operativeNames', 'helpers', 'notes', 'status', 'dayStatus'];
+        const allowedFields = ['client', 'site', 'scheduleDate', 'workForAppley', 'operative', 'helpers', 'notes', 'status', 'dayStatus', 'ledger', 'amount'];
         allowedFields.forEach(field => {
             if (req.body[field] !== undefined) {
                 updates[field] = req.body[field];
@@ -71,10 +72,9 @@ const updateSchedule = async (req, res) => {
             updateOperation,
             { new: true, runValidators: false }
         )
-            .populate('client', 'clientName')
-            .populate('site', 'siteName siteAddress')
-            .populate('operativeNames', 'name phone')
-            .populate('operativeName', 'name phone')
+            .populate('client', 'clientName clientId')
+            .populate('site', 'siteName siteAddress ledgerItems')
+            .populate('operative', 'name phone')
             .populate('helpers', 'name phone');
 
         if (!schedule) {
@@ -111,17 +111,15 @@ const getSchedules = async (req, res) => {
         const { employee } = req.query;
         if (employee) {
             filter.$or = [
-                { operativeNames: employee },
-                { operativeName: employee },
+                { operative: employee },
                 { helpers: employee }
             ];
         }
 
         const schedules = await ScheduleMaster.find(filter)
-            .populate('client', 'clientName')
-            .populate('site', 'siteName siteAddress')
-            .populate('operativeNames', 'name phone')
-            .populate('operativeName', 'name phone')
+            .populate('client', 'clientName clientId')
+            .populate('site', 'siteName siteAddress ledgerItems')
+            .populate('operative', 'name phone')
             .populate('helpers', 'name phone')
             .sort({ scheduleDate: 1 });
 
@@ -146,8 +144,10 @@ const getSitesByClient = async (req, res) => {
             return res.status(400).json({ success: false, message: 'Invalid client ID format' });
         }
 
-        const sites = await SiteMaster.find({ client: new mongoose.Types.ObjectId(clientId) })
-            .select('siteName siteAddress contactPerson contactPhone');
+        const sites = await SiteMaster.find({ 
+            client: new mongoose.Types.ObjectId(clientId),
+            status: 'Active' 
+        }).select('siteName siteAddress contactPerson contactPhone ledgerItems');
 
         console.log(`Found ${sites.length} sites for client ${clientId}`);
 
@@ -162,4 +162,63 @@ const getSitesByClient = async (req, res) => {
     }
 };
 
-module.exports = { createSchedule, updateSchedule, getSchedules, getSitesByClient };
+// POST - Complete schedule with files
+const completeSchedule = async (req, res) => {
+    try {
+        const { id } = req.params;
+        const files = req.files;
+        const SiteMaster = require('../models/SiteMaster');
+        const ClientMaster = require('../models/ClientMaster');
+        const path = require('path');
+
+        const schedule = await ScheduleMaster.findById(id);
+        if (!schedule) return res.status(404).json({ success: false, message: 'Schedule not found' });
+
+        const site = await SiteMaster.findById(schedule.site);
+        if (!site) return res.status(404).json({ success: false, message: 'Related site not found' });
+
+        const clientData = await ClientMaster.findById(schedule.client);
+        const clientShortId = clientData?.clientId?.toLowerCase() || 'unknown_client';
+        const siteSubfolder = (site.siteName || 'unknown_site').trim().replace(/[^a-z0-9]/gi, '_').toLowerCase();
+
+        const newDocs = [];
+        const processFiles = (fieldFiles, subfolder) => {
+            if (!fieldFiles) return;
+            const flist = Array.isArray(fieldFiles) ? fieldFiles : [fieldFiles];
+            flist.forEach(f => {
+                newDocs.push({
+                    name: f.originalname,
+                    url: `/uploads/client_master/${clientShortId}/site_master/${siteSubfolder}/${subfolder}/${path.basename(f.path)}`,
+                    path: f.path
+                });
+            });
+        };
+
+        if (files) {
+            processFiles(files.photos, 'photos');
+            processFiles(files.dailyReports, 'Daily_report');
+            processFiles(files.data, 'data');
+        }
+
+        // Update SiteMaster documents
+        if (newDocs.length > 0) {
+            site.documents = [...(site.documents || []), ...newDocs];
+            await site.save();
+        }
+
+        // Mark schedule as completed
+        schedule.dayStatus = 'Completed';
+        await schedule.save();
+
+        res.json({
+            success: true,
+            message: 'Site visit marked as completed and documents stored',
+            data: schedule
+        });
+    } catch (error) {
+        console.error('Error in completeSchedule:', error);
+        res.status(500).json({ success: false, message: error.message });
+    }
+};
+
+module.exports = { createSchedule, updateSchedule, getSchedules, getSitesByClient, completeSchedule };

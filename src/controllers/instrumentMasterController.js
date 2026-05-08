@@ -4,17 +4,14 @@ const path = require('path');
 const storeInstrumentMaster = async (req, res) => {
     try {
 
-        const { refNo, instrumentName, notes } = req.body;
+        const { model, serialNo, instrumentName, notes } = req.body;
         const files = req.files;
 
-        if (!refNo) {
-            return res.status(400).json({ success: false, message: 'Reference number is required' });
-        }
-        if (!instrumentName) {
-            return res.status(400).json({ success: false, message: 'Instrument name is required' });
+        if (!serialNo) {
+            return res.status(400).json({ success: false, message: 'Serial number is required' });
         }
 
-        const subfolder = `${refNo || 'no_ref'}-${instrumentName || 'unnamed'}`.trim().replace(/[^a-z0-9]/gi, '_').toLowerCase();
+        const subfolder = `${serialNo || 'no_serial'}-${model || 'no_model'}`.trim().replace(/[^a-z0-9]/gi, '_').toLowerCase();
 
         let photoData = null;
         if (files && files.photo) {
@@ -37,8 +34,9 @@ const storeInstrumentMaster = async (req, res) => {
         }
 
         const record = new InstrumentMaster({
-            refNo: refNo.trim(),
-            instrumentName: instrumentName.trim(),
+            model: model ? model.trim() : null,
+            serialNo: serialNo.trim(),
+            instrumentName: instrumentName ? instrumentName.trim() : null,
             photo: photoData,
             photos: photosData,
             notes: notes ? notes.trim() : null
@@ -56,7 +54,7 @@ const storeInstrumentMaster = async (req, res) => {
         if (error.code === 11000) {
             return res.status(409).json({
                 success: false,
-                message: `Reference number '${req.body.refNo}' already exists`
+                message: `Serial number '${req.body.serialNo}' already exists`
             });
         }
         res.status(500).json({
@@ -90,7 +88,7 @@ const getInstrumentById = async (req, res) => {
 
 const updateInstrumentMaster = async (req, res) => {
     try {
-        const { refNo, instrumentName, notes } = req.body;
+        const { model, serialNo, instrumentName, notes } = req.body;
         const files = req.files;
 
         const record = await InstrumentMaster.findById(req.params.id);
@@ -99,14 +97,15 @@ const updateInstrumentMaster = async (req, res) => {
         }
 
         const updateData = {};
-        if (refNo !== undefined) updateData.refNo = refNo.trim();
-        if (instrumentName !== undefined) updateData.instrumentName = instrumentName.trim();
+        if (model !== undefined) updateData.model = model ? model.trim() : null;
+        if (serialNo !== undefined) updateData.serialNo = serialNo.trim();
+        if (instrumentName !== undefined) updateData.instrumentName = instrumentName ? instrumentName.trim() : null;
         if (notes !== undefined) updateData.notes = notes ? notes.trim() : null;
 
         // Determine subfolder for URL (use provided or fallback to existing)
-        const finalRef = refNo !== undefined ? refNo : record.refNo;
-        const finalName = instrumentName !== undefined ? instrumentName : record.instrumentName;
-        const subfolder = `${finalRef || 'no_ref'}-${finalName || 'unnamed'}`.trim().replace(/[^a-z0-9]/gi, '_').toLowerCase();
+        const finalSerial = serialNo !== undefined ? serialNo : record.serialNo;
+        const finalModel = model !== undefined ? model : record.model;
+        const subfolder = `${finalSerial || 'no_serial'}-${finalModel || 'no_model'}`.trim().replace(/[^a-z0-9]/gi, '_').toLowerCase();
 
         if (files) {
             if (files.photo) {

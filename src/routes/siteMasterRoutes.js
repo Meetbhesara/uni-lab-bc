@@ -3,12 +3,13 @@ const router = express.Router();
 const multer = require('multer');
 const path = require('path');
 const fs = require('fs');
-const { storeSiteMaster, getSites, getSiteLedgers, getSitesByLedger, updateSiteMaster, deleteSiteMaster } = require('../controllers/siteMasterController');
+const { storeSiteMaster, getSites, getSiteLedgers, getSitesByLedger, updateSiteMaster, deleteSiteMaster, getNextSiteId } = require('../controllers/siteMasterController');
 const SiteMaster = require('../models/SiteMaster');
 
 // Add ledger routes
 router.get('/ledgers', getSiteLedgers);
 router.get('/by-ledger/:ledgerName', getSitesByLedger);
+router.get('/next-id/:clientId', getNextSiteId);
 
 // Debug route: GET /api/site-master/by-client/:clientId
 router.get('/by-client/:clientId', async (req, res) => {
@@ -28,26 +29,57 @@ router.get('/by-client/:clientId', async (req, res) => {
 
 // Dynamic Storage Configuration
 const storage = multer.diskStorage({
-    destination: (req, file, cb) => {
+    destination: async (req, file, cb) => {
         const useNas = process.env.USE_NAS === 'true';
         let nasBase = process.env.NAS_BASE_PATH || '/app/storage';
         if (useNas && !nasBase.startsWith('/')) nasBase = '/' + nasBase;
         const localBase = process.env.LOCAL_BASE_PATH || './uploads';
 
-        // Sanitize site name for folder naming
-        const siteName = (req.body.siteName || 'unknown_site').trim().replace(/[^a-z0-9]/gi, '_').toLowerCase();
+        try {
+            // Get client ObjectId from request
+            const clientObjId = req.body.client;
+            let clientShortId = 'unknown_client';
 
-        let targetDir;
-        if (useNas) {
-            // User specifically asked for /volume1/work/site_master/{site_name}
-            targetDir = path.join(nasBase, 'site_master', siteName);
-        } else {
-            const absoluteLocalBase = path.isAbsolute(localBase) ? localBase : path.join(process.cwd(), localBase);
-            targetDir = path.join(absoluteLocalBase, 'site_master', siteName);
+            if (clientObjId) {
+                const ClientMaster = require('../models/ClientMaster');
+                const clientRecord = await ClientMaster.findById(clientObjId);
+                if (clientRecord && clientRecord.clientId) {
+                    clientShortId = clientRecord.clientId.toLowerCase();
+                }
+            }
+
+            // Sanitize site name for folder naming
+            const siteName = (req.body.siteName || 'unknown_site').trim().replace(/[^a-z0-9]/gi, '_').toLowerCase();
+
+            let targetDir;
+            if (useNas) {
+                // Structure: client_master/[clientId]/site_master/[siteName]
+                targetDir = path.join(nasBase, 'client_master', clientShortId, 'site_master', siteName);
+            } else {
+                const absoluteLocalBase = path.isAbsolute(localBase) ? localBase : path.join(process.cwd(), localBase);
+                targetDir = path.join(absoluteLocalBase, 'client_master', clientShortId, 'site_master', siteName);
+            }
+
+            if (!fs.existsSync(targetDir)) fs.mkdirSync(targetDir, { recursive: true });
+
+            // Initialize subfolders
+            const subfolders = ['photos', 'Daily_report', 'data'];
+            subfolders.forEach(sub => {
+                const subPath = path.join(targetDir, sub);
+                if (!fs.existsSync(subPath)) fs.mkdirSync(subPath, { recursive: true });
+            });
+
+            // Decide which subfolder to use based on the field name
+            let sub = 'data'; // default
+            if (file.fieldname === 'photos') sub = 'photos';
+            else if (file.fieldname === 'dailyReports') sub = 'Daily_report';
+            else if (file.fieldname === 'data' || file.fieldname === 'docs') sub = 'data';
+
+            cb(null, path.join(targetDir, sub));
+        } catch (err) {
+            console.error('Multer destination error:', err);
+            cb(err);
         }
-
-        if (!fs.existsSync(targetDir)) fs.mkdirSync(targetDir, { recursive: true });
-        cb(null, targetDir);
     },
     filename: (req, file, cb) => {
         const uniqueSuffix = Date.now() + '-' + Math.round(Math.random() * 1e9);
@@ -67,8 +99,17 @@ const upload = multer({
     }
 });
 
-router.post('/', upload.fields([{ name: 'docs', maxCount: 10 }]), storeSiteMaster);
-router.put('/:id', upload.fields([{ name: 'docs', maxCount: 10 }]), updateSiteMaster);
+router.post('/', upload.fields([
+    { name: 'docs', maxCount: 30 },
+    { name: 'photos', maxCount: 30 },
+    { name: 'dailyReports', maxCount: 30 }
+]), storeSiteMaster);
+
+router.put('/:id', upload.fields([
+    { name: 'docs', maxCount: 30 },
+    { name: 'photos', maxCount: 30 },
+    { name: 'dailyReports', maxCount: 30 }
+]), updateSiteMaster);
 router.delete('/:id', deleteSiteMaster);
 router.get('/', getSites);
 

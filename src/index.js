@@ -7,8 +7,7 @@ const cors = require('cors');
 app.use(cors());
 connectDB();
 
-app.use('/uploads', exprees.static('uploads'));
-app.use('/api/uploads', exprees.static('uploads'));
+// Static middleware will be registered below after master paths are defined
 app.use(exprees.json({ extended: false }));
 
 const productRoutes = require('./routes/productRoutes');
@@ -24,6 +23,8 @@ const scheduleMasterRoutes = require('./routes/scheduleMasterRoutes');
 const instrumentMasterRoutes = require('./routes/instrumentMasterRoutes');
 const employeeAuthRoutes = require('./routes/employeeAuthRoutes');
 const employeeExpenseRoutes = require('./routes/employeeExpenseRoutes');
+const employeeTransferRoutes = require('./routes/employeeTransferRoutes');
+const employeeLedgerRoutes = require('./routes/employeeLedgerRoutes');
 const whatsappRoutes = require('./routes/whatsappRoutes');
 const path = require('path');
 const fs = require('fs');
@@ -45,6 +46,8 @@ app.use('/api/schedule-master', scheduleMasterRoutes);
 app.use('/api/instrument-master', instrumentMasterRoutes);
 app.use('/api/employee-auth', employeeAuthRoutes);
 app.use('/api/employee-expense', employeeExpenseRoutes);
+app.use('/api/employee-transfer', employeeTransferRoutes);
+app.use('/api/employee-ledger', employeeLedgerRoutes);
 
 // Dynamically serve vehicle-master documents based on USE_NAS flag
 const useNasFlag = process.env.USE_NAS;
@@ -105,6 +108,7 @@ const ensureDirectories = () => {
 };
 ensureDirectories();
 
+// Master Module Static Routes (Handles NAS or Local based on USE_NAS)
 app.use('/uploads/vehicle_master', exprees.static(vehicleMasterUploadPath));
 app.use('/api/uploads/vehicle_master', exprees.static(vehicleMasterUploadPath));
 
@@ -119,6 +123,10 @@ app.use('/api/uploads/site_master', exprees.static(siteMasterUploadPath));
 
 app.use('/uploads/instrument_master', exprees.static(instrumentMasterUploadPath));
 app.use('/api/uploads/instrument_master', exprees.static(instrumentMasterUploadPath));
+
+// Generic Fallback for other uploads (like Quotation PDFs in local folder)
+app.use('/uploads', exprees.static('uploads'));
+app.use('/api/uploads', exprees.static('uploads'));
 
 // Serve local infrastructure images from configured assets root
 const ASSETS_ROOT = process.env.ASSETS_ROOT_PATH || 'D:/';

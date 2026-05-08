@@ -18,14 +18,10 @@ const SiteMasterSchema = new mongoose.Schema({
         type: String,
         trim: true
     },
-    ledger: {
-        type: String,
-        trim: true
-    },
-    amount: {
-        type: Number,
-        default: 0
-    },
+    ledgerItems: [{
+        ledger: { type: String, trim: true },
+        amount: { type: Number, default: 0 }
+    }],
     contactPhone: {
         type: String,
         trim: true
@@ -47,6 +43,11 @@ const SiteMasterSchema = new mongoose.Schema({
         url: String,
         path: String
     }],
+    status: {
+        type: String,
+        enum: ['Active', 'Deactive'],
+        default: 'Active'
+    },
     createdAt: {
         type: Date,
         default: Date.now

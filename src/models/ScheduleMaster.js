@@ -27,27 +27,36 @@ const ScheduleMasterSchema = new mongoose.Schema({
         type: mongoose.Schema.Types.ObjectId,
         ref: 'EmployeeMaster'
     }],
-    operativeName: {
+    operative: {
         type: mongoose.Schema.Types.ObjectId,
-        ref: 'EmployeeMaster'
+        ref: 'EmployeeMaster',
+        required: true
     },
     helpers: [{
         type: mongoose.Schema.Types.ObjectId,
         ref: 'EmployeeMaster'
     }],
+    ledger: {
+        type: String,
+        trim: true
+    },
+    amount: {
+        type: Number,
+        default: 0
+    },
     notes: {
         type: String,
         trim: true
     },
     dayStatus: {
         type: String,
-        enum: ['scheduled', 'complete'],
-        default: 'scheduled'
+        enum: ['Scheduled', 'Completed'],
+        default: 'Scheduled'
     },
     status: {
         type: String,
-        enum: ['active', 'deactive'],
-        default: 'active'
+        enum: ['Active', 'Deactive'],
+        default: 'Active'
     }
 }, { timestamps: true });
 

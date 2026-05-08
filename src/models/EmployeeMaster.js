@@ -14,6 +14,10 @@ const EmployeeMasterSchema = new mongoose.Schema({
         type: Number,
         default: 0
     },
+    totalAmount: {
+        type: Number,
+        default: 0
+    },
     designation: {
         type: String,
         trim: true

@@ -11,48 +11,55 @@ const EmployeeExpenseSchema = new mongoose.Schema({
         default: Date.now,
         required: true
     },
-    siteId: {
-        type: mongoose.Schema.Types.ObjectId,
-        ref: 'SiteMaster',
-        required: false
-    },
-    siteIds: [{
-        type: mongoose.Schema.Types.ObjectId,
-        ref: 'SiteMaster'
+    clientSites: [{
+        clientId: { type: mongoose.Schema.Types.ObjectId, ref: 'ClientMaster' },
+        siteId: { type: mongoose.Schema.Types.ObjectId, ref: 'SiteMaster' }
     }],
-    attendance: {
-        type: String,
-        enum: ['Present', 'Absent', 'Half Day'],
-        default: 'Present'
-    },
     expenses: {
         breakfast: { type: Number, default: 0 },
         lunch: { type: Number, default: 0 },
         dinner: { type: Number, default: 0 },
-        petrol: { type: Number, default: 0 },
-        other: { type: Number, default: 0 }
+        petrol: { type: Number, default: 0 }
     },
     otherExpensesList: [{
         expenseName: { type: String, required: true },
         amount: { type: Number, required: true }
     }],
-    creditDebit: {
-        givenTo: [{
-            employeeRef: { type: mongoose.Schema.Types.ObjectId, ref: 'EmployeeMaster' },
-            amount: { type: Number, required: true }
-        }],
-        receivedFrom: [{
-            employeeRef: { type: mongoose.Schema.Types.ObjectId, ref: 'EmployeeMaster' },
-            amount: { type: Number, required: true }
-        }]
+    totalExpense: {
+        type: Number,
+        required: true,
+        default: 0
     },
+    remainingBalance: {
+        type: Number,
+        default: 0
+    },
+    photos: [{
+        name: String,
+        url: String,
+        path: String
+    }],
+    dataFiles: [{
+        name: String,
+        url: String,
+        path: String
+    }],
+    dailyReports: [{
+        name: String,
+        url: String,
+        path: String
+    }],
     notes: {
         type: String
+    },
+    createdBy: {
+        type: mongoose.Schema.Types.ObjectId,
+        ref: 'User'
     },
     createdAt: {
         type: Date,
         default: Date.now
     }
-});
+}, { timestamps: true });
 
 module.exports = mongoose.model('EmployeeExpense', EmployeeExpenseSchema);

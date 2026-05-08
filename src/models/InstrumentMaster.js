@@ -1,15 +1,20 @@
 const mongoose = require('mongoose');
 
 const InstrumentMasterSchema = new mongoose.Schema({
-    refNo: {
+    model: {
+        type: String,
+        trim: true
+    },
+    serialNo: {
         type: String,
         trim: true,
+        required: true,
         unique: true
     },
     instrumentName: {
         type: String,
         trim: true,
-        required: true
+        required: false
     },
     photo: {
         name: String,
