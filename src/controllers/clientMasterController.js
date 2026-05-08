@@ -228,6 +228,10 @@ const deleteClientMaster = async (req, res) => {
         const record = await ClientMaster.findByIdAndDelete(_id);
         if (!record) return res.status(404).json({ success: false, message: 'Client not found' });
         
+        // Delete all sites associated with this client
+        const SiteMaster = require('../models/SiteMaster');
+        await SiteMaster.deleteMany({ client: _id });
+
         // Optional: Delete physical files if folder structure is ID-based
         const folderPath = path.join(process.cwd(), 'uploads', 'client_master', record.clientId || '');
         if (record.clientId && fs.existsSync(folderPath)) {

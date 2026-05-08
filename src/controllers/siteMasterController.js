@@ -20,9 +20,18 @@ const storeSiteMaster = async (req, res) => {
 
         const clientShortId = clientData.clientId || '00000';
 
-        // Find existing sites for this client to determine next sequence
-        const existingSites = await SiteMaster.find({ client });
-        const nextSeq = existingSites.length + 1;
+        const prefix = `${clientShortId}-`;
+        const sitesWithPrefix = await SiteMaster.find({ siteId: { $regex: `^${prefix}` } });
+        
+        let nextSeq = 1;
+        if (sitesWithPrefix.length > 0) {
+            const maxSuffix = Math.max(...sitesWithPrefix.map(s => {
+                const parts = s.siteId.split('-');
+                const suffix = parseInt(parts[parts.length - 1]);
+                return isNaN(suffix) ? 0 : suffix;
+            }));
+            nextSeq = maxSuffix + 1;
+        }
         const generatedSiteId = `${clientShortId}-${String(nextSeq).padStart(4, '0')}`;
 
         // --- Folder Creation Logic ---
@@ -220,9 +229,18 @@ const getNextSiteId = async (req, res) => {
         const clientData = await ClientMaster.findById(clientId);
         if (!clientData) return res.status(404).json({ success: false, message: 'Client not found' });
 
-        const clientShortId = clientData.clientId || '00000';
-        const existingSites = await SiteMaster.find({ client: clientId });
-        const nextSeq = existingSites.length + 1;
+        const prefix = `${clientShortId}-`;
+        const sitesWithPrefix = await SiteMaster.find({ siteId: { $regex: `^${prefix}` } });
+
+        let nextSeq = 1;
+        if (sitesWithPrefix.length > 0) {
+            const maxSuffix = Math.max(...sitesWithPrefix.map(s => {
+                const parts = s.siteId.split('-');
+                const suffix = parseInt(parts[parts.length - 1]);
+                return isNaN(suffix) ? 0 : suffix;
+            }));
+            nextSeq = maxSuffix + 1;
+        }
         const generatedSiteId = `${clientShortId}-${String(nextSeq).padStart(4, '0')}`;
 
         res.json({ success: true, nextId: generatedSiteId });
