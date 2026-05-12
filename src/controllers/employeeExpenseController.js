@@ -7,47 +7,37 @@ exports.adminAddExpense = async (req, res) => {
     const session = await mongoose.startSession();
     session.startTransaction();
     try {
-        const { employeeId, date, clientSites, expenses, otherExpensesList, notes } = req.body;
+        const { employeeId, date, notes, expenses, otherExpensesList, clientSites } = req.body;
+        if (!employeeId) return res.status(400).json({ success: false, message: 'Employee ID is required' });
 
-        if (!employeeId) {
-            await session.abortTransaction();
-            session.endSession();
-            return res.status(400).json({ success: false, message: 'Employee ID is required' });
-        }
+        // Parse JSON fields from FormData
+        const parsedExpenses = typeof expenses === 'string' ? JSON.parse(expenses) : (expenses || {});
+        const parsedOtherExpenses = typeof otherExpensesList === 'string' ? JSON.parse(otherExpensesList) : (otherExpensesList || []);
+        const parsedClientSites = typeof clientSites === 'string' ? JSON.parse(clientSites) : (clientSites || []);
 
         // 1. Calculate Total Expense
-        const standardTotal = (Number(expenses?.breakfast) || 0) + 
-                            (Number(expenses?.lunch) || 0) + 
-                            (Number(expenses?.dinner) || 0) + 
-                            (Number(expenses?.petrol) || 0);
+        const standardTotal = (Number(parsedExpenses.breakfast) || 0) + 
+                            (Number(parsedExpenses.lunch) || 0) + 
+                            (Number(parsedExpenses.dinner) || 0) + 
+                            (Number(parsedExpenses.petrol) || 0);
         
-        const otherTotal = (JSON.parse(otherExpensesList || '[]')).reduce((acc, curr) => acc + (Number(curr.amount) || 0), 0);
+        const otherTotal = parsedOtherExpenses.reduce((acc, curr) => acc + (Number(curr.amount) || 0), 0);
         const totalExpense = standardTotal + otherTotal;
 
-        // 2. Process Files
+        // 2. Process Files (from upload.any() array)
         const photos = [];
         const dataFiles = [];
         const dailyReports = [];
 
-        if (req.files) {
-            if (req.files.photos) {
-                req.files.photos.forEach(f => {
-                    const relativePath = f.path.replace(/\\/g, '/').split('/uploads/')[1];
-                    photos.push({ name: f.originalname, url: `/uploads/${relativePath}`, path: f.path });
-                });
-            }
-            if (req.files.dailyReports) {
-                req.files.dailyReports.forEach(f => {
-                    const relativePath = f.path.replace(/\\/g, '/').split('/uploads/')[1];
-                    dailyReports.push({ name: f.originalname, url: `/uploads/${relativePath}`, path: f.path });
-                });
-            }
-            if (req.files.data) {
-                req.files.data.forEach(f => {
-                    const relativePath = f.path.replace(/\\/g, '/').split('/uploads/')[1];
-                    dataFiles.push({ name: f.originalname, url: `/uploads/${relativePath}`, path: f.path });
-                });
-            }
+        if (req.files && Array.isArray(req.files)) {
+            req.files.forEach(f => {
+                const relativePath = f.path.replace(/\\/g, '/').split('/uploads/')[1];
+                const fileObj = { name: f.originalname, url: `/uploads/${relativePath}`, path: f.path };
+                
+                if (f.fieldname.includes('photos')) photos.push(fileObj);
+                else if (f.fieldname.includes('dailyReports')) dailyReports.push(fileObj);
+                else if (f.fieldname.includes('data')) dataFiles.push(fileObj);
+            });
         }
 
         // 3. Update Employee Balance
@@ -61,15 +51,15 @@ exports.adminAddExpense = async (req, res) => {
         const newExpense = new EmployeeExpense({
             employeeId,
             date: date || new Date(),
-            clientSites: JSON.parse(clientSites || '[]'),
-            expenses: expenses ? JSON.parse(expenses) : {},
-            otherExpensesList: JSON.parse(otherExpensesList || '[]'),
+            clientSites: parsedClientSites,
+            expenses: parsedExpenses,
+            otherExpensesList: parsedOtherExpenses,
             totalExpense,
             remainingBalance: employee.totalAmount,
+            notes,
             photos,
             dataFiles,
-            dailyReports,
-            notes
+            dailyReports
         });
 
         await newExpense.save({ session });
@@ -87,7 +77,13 @@ exports.adminAddExpense = async (req, res) => {
 
         await session.commitTransaction();
         session.endSession();
-        res.status(201).json({ success: true, message: 'Expense saved and balance updated', data: newExpense });
+
+        res.status(201).json({ 
+            success: true, 
+            message: 'Expense saved and balance updated', 
+            data: newExpense,
+            updatedEmployee: employee
+        });
     } catch (error) {
         await session.abortTransaction();
         session.endSession();

@@ -15,8 +15,28 @@ const storage = multer.diskStorage({
 
         try {
             // clientShortId and siteSubfolder should be provided by frontend
-            const clientShortId = (req.body.clientShortId || 'unknown_client').toLowerCase();
-            const siteSubfolder = (req.body.siteSubfolder || 'unknown_site').toLowerCase();
+            // For site-specific files, we'll try to find the site details from the body
+            let clientShortId = (req.body.clientShortId || 'unknown_client').toLowerCase();
+            let siteSubfolder = (req.body.siteSubfolder || 'unknown_site').toLowerCase();
+
+            // If fieldname is site_X_photos, we might need to adjust destination
+            if (file.fieldname.startsWith('site_')) {
+                const parts = file.fieldname.split('_');
+                const idx = parseInt(parts[1]);
+                const clientSites = JSON.parse(req.body.clientSites || '[]');
+                
+                if (clientSites[idx]) {
+                    // We need to resolve the folder for this specific site
+                    // This is tricky because we need the site/client names which aren't in req.body.clientSites (only IDs)
+                    // But wait, the frontend should have sent metadata for all sites if we want perfection.
+                    // For now, we'll use the root targetDir if we can't resolve individual ones,
+                    // OR we'll assume the frontend sends 'site_0_folder', 'site_1_folder' etc.
+                    
+                    // Let's check if frontend sent specific metadata
+                    if (req.body[`site_${idx}_clientShortId`]) clientShortId = req.body[`site_${idx}_clientShortId`].toLowerCase();
+                    if (req.body[`site_${idx}_siteSubfolder`]) siteSubfolder = req.body[`site_${idx}_siteSubfolder`].toLowerCase();
+                }
+            }
 
             let targetDir;
             if (useNas) {
@@ -28,14 +48,19 @@ const storage = multer.diskStorage({
 
             if (!fs.existsSync(targetDir)) fs.mkdirSync(targetDir, { recursive: true });
 
+            // Initialize all 3 folders for consistency
+            const subfolders = ['photos', 'Daily_report', 'data'];
+            subfolders.forEach(sub => {
+                const subPath = path.join(targetDir, sub);
+                if (!fs.existsSync(subPath)) fs.mkdirSync(subPath, { recursive: true });
+            });
+
             let sub = 'data'; 
-            if (file.fieldname === 'photos') sub = 'photos';
-            else if (file.fieldname === 'dailyReports') sub = 'Daily_report';
+            if (file.fieldname.includes('photos')) sub = 'photos';
+            else if (file.fieldname.includes('dailyReports')) sub = 'Daily_report';
+            else if (file.fieldname.includes('data')) sub = 'data';
 
-            const subPath = path.join(targetDir, sub);
-            if (!fs.existsSync(subPath)) fs.mkdirSync(subPath, { recursive: true });
-
-            cb(null, subPath);
+            cb(null, path.join(targetDir, sub));
         } catch (err) {
             cb(err);
         }
@@ -66,12 +91,8 @@ router.get('/my-expenses', employeeAuth, employeeExpenseController.getExpensesFo
 router.get('/all', employeeExpenseController.getAllExpenses);
 router.get('/admin/:employeeId', employeeExpenseController.getExpensesByEmployee);
 
-// Admin Add Expense with File Support
-router.post('/admin/add-expense', upload.fields([
-    { name: 'photos', maxCount: 10 },
-    { name: 'dailyReports', maxCount: 10 },
-    { name: 'data', maxCount: 10 }
-]), employeeExpenseController.adminAddExpense);
+// Admin Add Expense with File Support (Using any() for dynamic site-wise fields)
+router.post('/admin/add-expense', upload.any(), employeeExpenseController.adminAddExpense);
 
 router.delete('/:id', employeeExpenseController.deleteExpense);
 

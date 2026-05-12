@@ -53,6 +53,14 @@ const ScheduleMasterSchema = new mongoose.Schema({
         enum: ['Scheduled', 'Completed'],
         default: 'Scheduled'
     },
+    vehicle: {
+        type: mongoose.Schema.Types.ObjectId,
+        ref: 'VehicleMaster'
+    },
+    instruments: [{
+        type: mongoose.Schema.Types.ObjectId,
+        ref: 'InstrumentMaster'
+    }],
     status: {
         type: String,
         enum: ['Active', 'Deactive'],

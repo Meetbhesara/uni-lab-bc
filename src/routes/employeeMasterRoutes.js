@@ -3,7 +3,7 @@ const router = express.Router();
 const multer = require('multer');
 const path = require('path');
 const fs = require('fs');
-const { storeEmployeeMaster, updateEmployeeMaster, getEmployees, getNextEmpId, deleteEmployeeMaster } = require('../controllers/employeeMasterController');
+const { storeEmployeeMaster, updateEmployeeMaster, getEmployees, getNextEmpId, deleteEmployeeMaster, getEmployeeById } = require('../controllers/employeeMasterController');
 
 // Dynamic Storage Configuration
 const storage = multer.diskStorage({
@@ -52,6 +52,7 @@ const upload = multer({
 });
 
 router.get('/next-id', getNextEmpId);
+router.get('/:id', getEmployeeById);
 
 router.post('/', upload.fields([
     { name: 'photo', maxCount: 1 },

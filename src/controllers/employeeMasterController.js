@@ -282,10 +282,22 @@ const deleteEmployeeMaster = async (req, res) => {
     }
 };
 
+const getEmployeeById = async (req, res) => {
+    try {
+        const _id = req.params.id;
+        const employee = await EmployeeMaster.findById(_id);
+        if (!employee) return res.status(404).json({ success: false, message: 'Employee not found' });
+        res.json({ success: true, data: employee });
+    } catch (error) {
+        res.status(500).json({ success: false, message: error.message });
+    }
+};
+
 module.exports = {
     storeEmployeeMaster,
     updateEmployeeMaster,
     getEmployees,
+    getEmployeeById,
     getNextEmpId,
     deleteEmployeeMaster
 };

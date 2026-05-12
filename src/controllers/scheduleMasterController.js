@@ -3,7 +3,7 @@ const ScheduleMaster = require('../models/ScheduleMaster');
 // POST - Create a new schedule
 const createSchedule = async (req, res) => {
     try {
-        const { client, site, scheduleDate, workForAppley, operative, helpers, notes, status, dayStatus, ledger, amount } = req.body;
+        const { client, site, scheduleDate, workForAppley, operative, helpers, notes, status, dayStatus, ledger, amount, vehicle, instruments } = req.body;
 
         if (!client || !site || !scheduleDate || !operative) {
             return res.status(400).json({
@@ -22,6 +22,8 @@ const createSchedule = async (req, res) => {
             ledger,
             amount,
             notes,
+            vehicle: vehicle || null,
+            instruments: instruments || [],
             status: status || 'Active',
             dayStatus: dayStatus || 'Scheduled'
         });
@@ -31,7 +33,9 @@ const createSchedule = async (req, res) => {
             .populate('client', 'clientName clientId')
             .populate('site', 'siteName siteAddress ledgerItems')
             .populate('operative', 'name phone')
-            .populate('helpers', 'name phone');
+            .populate('helpers', 'name phone')
+            .populate('vehicle', 'vehicleNumber vehicleName')
+            .populate('instruments', 'instrumentName serialNo model');
 
         res.status(201).json({ success: true, message: 'Schedule created successfully', data: populated });
     } catch (error) {
@@ -47,7 +51,7 @@ const updateSchedule = async (req, res) => {
         // Only update fields that are actually provided
         const updates = {};
         const unsets = {};
-        const allowedFields = ['client', 'site', 'scheduleDate', 'workForAppley', 'operative', 'helpers', 'notes', 'status', 'dayStatus', 'ledger', 'amount'];
+        const allowedFields = ['client', 'site', 'scheduleDate', 'workForAppley', 'operative', 'helpers', 'notes', 'status', 'dayStatus', 'ledger', 'amount', 'vehicle', 'instruments'];
         allowedFields.forEach(field => {
             if (req.body[field] !== undefined) {
                 updates[field] = req.body[field];
@@ -75,7 +79,9 @@ const updateSchedule = async (req, res) => {
             .populate('client', 'clientName clientId')
             .populate('site', 'siteName siteAddress ledgerItems')
             .populate('operative', 'name phone')
-            .populate('helpers', 'name phone');
+            .populate('helpers', 'name phone')
+            .populate('vehicle', 'vehicleNumber vehicleName')
+            .populate('instruments', 'instrumentName serialNo model');
 
         if (!schedule) {
             return res.status(404).json({ success: false, message: 'Schedule not found' });
@@ -121,6 +127,8 @@ const getSchedules = async (req, res) => {
             .populate('site', 'siteName siteAddress ledgerItems')
             .populate('operative', 'name phone')
             .populate('helpers', 'name phone')
+            .populate('vehicle', 'vehicleNumber vehicleName')
+            .populate('instruments', 'instrumentName serialNo model')
             .sort({ scheduleDate: 1 });
 
         res.json({ success: true, data: schedules });

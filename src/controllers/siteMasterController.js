@@ -122,7 +122,20 @@ const storeSiteMaster = async (req, res) => {
 
 const getSites = async (req, res) => {
     try {
-        const sites = await SiteMaster.find()
+        const { search } = req.query;
+        let query = {};
+        if (search) {
+            query = {
+                $or: [
+                    { siteName: { $regex: search, $options: 'i' } },
+                    { siteId: { $regex: search, $options: 'i' } },
+                    { siteAddress: { $regex: search, $options: 'i' } },
+                    { 'contactPersons.name': { $regex: search, $options: 'i' } },
+                    { 'contactPersons.phone': { $regex: search, $options: 'i' } }
+                ]
+            };
+        }
+        const sites = await SiteMaster.find(query)
             .populate('client', 'clientName')
             .sort({ createdAt: -1 });
         res.json({ success: true, data: sites });
