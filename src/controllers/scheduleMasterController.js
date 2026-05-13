@@ -1,14 +1,18 @@
 const ScheduleMaster = require('../models/ScheduleMaster');
+const SiteMaster = require('../models/SiteMaster');
+const ClientMaster = require('../models/ClientMaster');
+const mongoose = require('mongoose');
+const path = require('path');
 
 // POST - Create a new schedule
 const createSchedule = async (req, res) => {
     try {
         const { client, site, scheduleDate, workForAppley, operative, helpers, notes, status, dayStatus, ledger, amount, vehicle, instruments } = req.body;
 
-        if (!client || !site || !scheduleDate || !operative) {
+        if (!client || !site || !scheduleDate) {
             return res.status(400).json({
                 success: false,
-                message: 'Client, site, schedule date, and operative are required'
+                message: 'Client, site, and schedule date are required'
             });
         }
 
@@ -17,7 +21,7 @@ const createSchedule = async (req, res) => {
             site,
             scheduleDate,
             workForAppley,
-            operative,
+            operative: operative || undefined,
             helpers: helpers || [],
             ledger,
             amount,
@@ -54,7 +58,12 @@ const updateSchedule = async (req, res) => {
         const allowedFields = ['client', 'site', 'scheduleDate', 'workForAppley', 'operative', 'helpers', 'notes', 'status', 'dayStatus', 'ledger', 'amount', 'vehicle', 'instruments'];
         allowedFields.forEach(field => {
             if (req.body[field] !== undefined) {
-                updates[field] = req.body[field];
+                // If the field is an ObjectId field and is an empty string, set it to undefined/null
+                if (['operative', 'vehicle'].includes(field) && req.body[field] === "") {
+                    updates[field] = null;
+                } else {
+                    updates[field] = req.body[field];
+                }
             }
         });
 
@@ -140,28 +149,17 @@ const getSchedules = async (req, res) => {
 // GET - Get sites for a specific client
 const getSitesByClient = async (req, res) => {
     try {
-        const SiteMaster = require('../models/SiteMaster');
-        const mongoose = require('mongoose');
         const { clientId } = req.params;
-
-        console.log('getSitesByClient called with clientId:', clientId);
-
-        // Validate that clientId is a valid ObjectId
         if (!mongoose.Types.ObjectId.isValid(clientId)) {
-            console.log('Invalid ObjectId:', clientId);
             return res.status(400).json({ success: false, message: 'Invalid client ID format' });
         }
-
         const sites = await SiteMaster.find({ 
             client: new mongoose.Types.ObjectId(clientId),
             status: 'Active' 
-        }).select('siteName siteAddress contactPerson contactPhone ledgerItems');
+        }).select('siteName siteAddress contactPersons contactPhone ledgerItems');
 
         console.log(`Found ${sites.length} sites for client ${clientId}`);
 
-        // Debug: also log all sites to see what's in the database
-        const allSites = await SiteMaster.find({}).select('siteName client');
-        console.log('All sites in DB:', JSON.stringify(allSites, null, 2));
 
         res.json({ success: true, data: sites });
     } catch (error) {
@@ -175,17 +173,18 @@ const completeSchedule = async (req, res) => {
     try {
         const { id } = req.params;
         const files = req.files;
-        const SiteMaster = require('../models/SiteMaster');
-        const ClientMaster = require('../models/ClientMaster');
-        const path = require('path');
+
 
         const schedule = await ScheduleMaster.findById(id);
         if (!schedule) return res.status(404).json({ success: false, message: 'Schedule not found' });
 
-        const site = await SiteMaster.findById(schedule.site);
+        const siteId = schedule.site?._id || schedule.site;
+        const clientId = schedule.client?._id || schedule.client;
+
+        const site = await SiteMaster.findById(siteId);
         if (!site) return res.status(404).json({ success: false, message: 'Related site not found' });
 
-        const clientData = await ClientMaster.findById(schedule.client);
+        const clientData = await ClientMaster.findById(clientId);
         const clientShortId = clientData?.clientId?.toLowerCase() || 'unknown_client';
         const siteSubfolder = (site.siteName || 'unknown_site').trim().replace(/[^a-z0-9]/gi, '_').toLowerCase();
 

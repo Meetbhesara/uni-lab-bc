@@ -29,8 +29,7 @@ const ScheduleMasterSchema = new mongoose.Schema({
     }],
     operative: {
         type: mongoose.Schema.Types.ObjectId,
-        ref: 'EmployeeMaster',
-        required: true
+        ref: 'EmployeeMaster'
     },
     helpers: [{
         type: mongoose.Schema.Types.ObjectId,
