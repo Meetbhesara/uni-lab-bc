@@ -39,35 +39,81 @@ const storage = multer.diskStorage({
             }
 
             let targetDir;
-            if (useNas) {
-                targetDir = path.join(nasBase, 'client_master', clientShortId, 'site_master', siteSubfolder);
+            const absoluteLocalBase = path.isAbsolute(localBase) ? localBase : path.join(process.cwd(), localBase);
+
+            if (file.fieldname.startsWith('expense_')) {
+                const parts = file.fieldname.split('_'); // expense_petrol
+                const expenseName = parts[1];
+                const empId = req.body.empId || req.body.employeeId || 'unknown_employee';
+                targetDir = useNas 
+                    ? path.join(nasBase, 'employee_master', empId, expenseName)
+                    : path.join(absoluteLocalBase, 'employee_master', empId, expenseName);
+            } else if (file.fieldname.startsWith('otherExpense_')) {
+                const parts = file.fieldname.split('_'); // otherExpense_0
+                const empId = req.body.empId || req.body.employeeId || 'unknown_employee';
+                targetDir = useNas 
+                    ? path.join(nasBase, 'employee_master', empId, 'other_expenses')
+                    : path.join(absoluteLocalBase, 'employee_master', empId, 'other_expenses');
             } else {
-                const absoluteLocalBase = path.isAbsolute(localBase) ? localBase : path.join(process.cwd(), localBase);
-                targetDir = path.join(absoluteLocalBase, 'client_master', clientShortId, 'site_master', siteSubfolder);
+                if (useNas) {
+                    targetDir = path.join(nasBase, 'client_master', clientShortId, 'site_master', siteSubfolder);
+                } else {
+                    targetDir = path.join(absoluteLocalBase, 'client_master', clientShortId, 'site_master', siteSubfolder);
+                }
             }
 
             if (!fs.existsSync(targetDir)) fs.mkdirSync(targetDir, { recursive: true });
 
-            // Initialize all 3 folders for consistency
-            const subfolders = ['photos', 'Daily_report', 'data'];
-            subfolders.forEach(sub => {
-                const subPath = path.join(targetDir, sub);
-                if (!fs.existsSync(subPath)) fs.mkdirSync(subPath, { recursive: true });
-            });
+            let finalDir = targetDir;
+            if (!file.fieldname.startsWith('expense_') && !file.fieldname.startsWith('otherExpense_')) {
+                // Initialize all 3 folders for consistency
+                const subfolders = ['photos', 'Daily_report', 'data'];
+                subfolders.forEach(sub => {
+                    const subPath = path.join(targetDir, sub);
+                    if (!fs.existsSync(subPath)) fs.mkdirSync(subPath, { recursive: true });
+                });
 
-            let sub = 'data'; 
-            if (file.fieldname.includes('photos')) sub = 'photos';
-            else if (file.fieldname.includes('dailyReports')) sub = 'Daily_report';
-            else if (file.fieldname.includes('data')) sub = 'data';
+                let sub = 'data'; 
+                if (file.fieldname.includes('photos')) sub = 'photos';
+                else if (file.fieldname.includes('dailyReports')) sub = 'Daily_report';
+                else if (file.fieldname.includes('data')) sub = 'data';
+                finalDir = path.join(targetDir, sub);
+            }
 
-            cb(null, path.join(targetDir, sub));
+            req.targetDirs = req.targetDirs || {};
+            req.targetDirs[file.fieldname] = finalDir;
+            cb(null, finalDir);
         } catch (err) {
             cb(err);
         }
     },
     filename: (req, file, cb) => {
-        const uniqueSuffix = Date.now() + '-' + Math.round(Math.random() * 1e9);
-        cb(null, file.fieldname + '-' + uniqueSuffix + path.extname(file.originalname));
+        let namePrefix = file.fieldname;
+        const dateStr = req.body.date || new Date().toISOString().split('T')[0];
+
+        if (file.fieldname.startsWith('expense_')) {
+            const expenseName = file.fieldname.split('_')[1]; // e.g. petrol
+            namePrefix = `${expenseName}-${dateStr}`;
+        } else if (file.fieldname.startsWith('otherExpense_')) {
+            namePrefix = `other_expenses-${dateStr}`;
+        }
+
+        let finalName = namePrefix + path.extname(file.originalname);
+        const finalDir = req.targetDirs ? req.targetDirs[file.fieldname] : null;
+
+        if (finalDir && fs.existsSync(finalDir)) {
+            const existingFiles = fs.readdirSync(finalDir);
+            let numFiles = 1;
+            while(existingFiles.includes(finalName)) {
+                finalName = `${namePrefix} (${numFiles})${path.extname(file.originalname)}`;
+                numFiles++;
+            }
+        } else {
+             // Fallback
+             finalName = namePrefix + '-' + Date.now() + path.extname(file.originalname);
+        }
+
+        cb(null, finalName);
     }
 });
 

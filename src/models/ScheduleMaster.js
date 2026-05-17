@@ -49,7 +49,7 @@ const ScheduleMasterSchema = new mongoose.Schema({
     },
     dayStatus: {
         type: String,
-        enum: ['Scheduled', 'Completed'],
+        enum: ['Scheduled', 'Completed', 'Rejected'],
         default: 'Scheduled'
     },
     vehicle: {

@@ -228,4 +228,22 @@ const completeSchedule = async (req, res) => {
     }
 };
 
-module.exports = { createSchedule, updateSchedule, getSchedules, getSitesByClient, completeSchedule };
+// PUT - Reject a schedule
+const rejectSchedule = async (req, res) => {
+    try {
+        const { id } = req.params;
+        const schedule = await ScheduleMaster.findById(id);
+        if (!schedule) {
+            return res.status(404).json({ success: false, message: 'Schedule not found' });
+        }
+        schedule.dayStatus = 'Rejected';
+        await schedule.save();
+
+        res.json({ success: true, message: 'Schedule marked as rejected', data: schedule });
+    } catch (error) {
+        console.error('Error in rejectSchedule:', error);
+        res.status(500).json({ success: false, message: error.message });
+    }
+};
+
+module.exports = { createSchedule, updateSchedule, getSchedules, getSitesByClient, completeSchedule, rejectSchedule };

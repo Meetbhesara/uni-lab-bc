@@ -21,9 +21,16 @@ const EmployeeExpenseSchema = new mongoose.Schema({
         dinner: { type: Number, default: 0 },
         petrol: { type: Number, default: 0 }
     },
+    expenseFiles: {
+        breakfast: [{ name: String, url: String, path: String }],
+        lunch: [{ name: String, url: String, path: String }],
+        dinner: [{ name: String, url: String, path: String }],
+        petrol: [{ name: String, url: String, path: String }]
+    },
     otherExpensesList: [{
         expenseName: { type: String, required: true },
-        amount: { type: Number, required: true }
+        amount: { type: Number, required: true },
+        files: [{ name: String, url: String, path: String }]
     }],
     totalExpense: {
         type: Number,
@@ -51,6 +58,24 @@ const EmployeeExpenseSchema = new mongoose.Schema({
     }],
     notes: {
         type: String
+    },
+    attendance: {
+        type: String,
+        enum: ['Present', 'Absent', 'Half Day'],
+        default: 'Present'
+    },
+    attendanceRemark: {
+        type: String
+    },
+    creditDebit: {
+        givenTo: [{
+            employeeRef: { type: mongoose.Schema.Types.ObjectId, ref: 'EmployeeMaster' },
+            amount: { type: Number, default: 0 }
+        }],
+        receivedFrom: [{
+            employeeRef: { type: mongoose.Schema.Types.ObjectId, ref: 'EmployeeMaster' },
+            amount: { type: Number, default: 0 }
+        }]
     },
     createdBy: {
         type: mongoose.Schema.Types.ObjectId,
