@@ -19,8 +19,8 @@ const storage = multer.diskStorage({
         if (useNas === 'true' && !nasBase.startsWith('/')) nasBase = '/' + nasBase;
         const localBase = process.env.LOCAL_BASE_PATH || './uploads';
 
-        const { refNo, instrumentName } = req.body;
-        const subfolder = `${refNo || 'no_ref'}-${instrumentName || 'unnamed'}`.trim().replace(/[^a-z0-9]/gi, '_').toLowerCase();
+        const { serialNo, model } = req.body;
+        const subfolder = `${serialNo || 'no_serial'}-${model || 'no_model'}`.trim().replace(/[^a-z0-9]/gi, '_').toLowerCase();
 
         let targetDir;
         if (useNas === 'true') {

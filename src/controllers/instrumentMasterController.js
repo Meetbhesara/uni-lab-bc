@@ -139,7 +139,7 @@ const updateInstrumentMaster = async (req, res) => {
         if (error.code === 11000) {
             return res.status(409).json({
                 success: false,
-                message: `Reference number '${req.body.refNo}' already exists`
+                message: `Serial number '${req.body.serialNo}' already exists`
             });
         }
         res.status(500).json({ success: false, message: error.message });

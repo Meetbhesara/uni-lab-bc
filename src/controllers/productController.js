@@ -1,6 +1,7 @@
 const Product = require('../models/Product');
 const cloudinary = require('../configs/cloudinary');
 const fs = require('fs');
+const path = require('path');
 
 const getUserFromRequest = (req) => {
     // Basic extraction if auth middleware attaches user
@@ -113,8 +114,8 @@ const getProducts = async (req, res) => {
 
         res.json(products);
     } catch (err) {
-        console.error(err.message);
-        res.status(500).send('Server Error');
+        console.error('❌ Error in getProducts:', err);
+        res.status(500).json({ success: false, message: err.message || 'Server Error' });
     }
 };
 
@@ -163,19 +164,23 @@ const getProductById = async (req, res) => {
 
         res.json(p);
     } catch (err) {
-        console.error(err.message);
+        console.error('❌ Error in getProductById:', err);
         if (err.kind === 'ObjectId') {
             return res.status(404).json({ msg: 'Product not found' });
         }
-        res.status(500).send('Server Error');
+        res.status(500).json({ success: false, message: err.message || 'Server Error' });
     }
 };
 
 const createProduct = async (req, res) => {
+    console.log('🚀 Backend [createProduct] request received');
+    console.log('Payload body:', req.body);
+    console.log('Uploaded files:', req.files);
     try {
         const { name, description, category, details, sellingPriceStart, sellingPriceEnd, purchasePrice, dealerPrice, vendor, vendors, alternativeNames } = req.body;
 
         if (!name || !description || !category) {
+            console.warn('⚠️ Validation failed: Missing required fields (name, description, category)');
             return res.status(400).json({ msg: 'Please provide required fields: name, description, category' });
         }
 
@@ -248,17 +253,24 @@ const createProduct = async (req, res) => {
         });
 
         const product = await newProduct.save();
+        console.log('✅ createProduct SUCCESS:', { productId: product._id, name: product.name });
         res.json(product);
     } catch (err) {
-        console.error(err.message);
-        res.status(500).send('Server Error');
+        console.error('❌ Error in createProduct:', err);
+        res.status(500).json({ success: false, message: err.message || 'Server Error' });
     }
 };
 
 const updateProduct = async (req, res) => {
+    console.log(`🚀 Backend [updateProduct] request received for ID: ${req.params.id}`);
+    console.log('Payload body:', req.body);
+    console.log('Uploaded files:', req.files);
     try {
         let product = await Product.findById(req.params.id);
-        if (!product) return res.status(404).json({ msg: 'Product not found' });
+        if (!product) {
+            console.warn(`⚠️ Product not found with ID: ${req.params.id}`);
+            return res.status(404).json({ msg: 'Product not found' });
+        }
 
         const { name, description, category, details, alternativeNames, vendors } = req.body;
 
@@ -364,11 +376,12 @@ const updateProduct = async (req, res) => {
         }
 
         await product.save();
+        console.log(`✅ updateProduct SUCCESS for ID: ${req.params.id}`, { name: product.name });
         res.json(product);
 
     } catch (err) {
-        console.error(err.message);
-        res.status(500).json({ message: err.message || 'Server Error' });
+        console.error('❌ Error in updateProduct:', err);
+        res.status(500).json({ success: false, message: err.message || 'Server Error' });
     }
 };
 
@@ -389,8 +402,8 @@ const deleteProduct = async (req, res) => {
         await product.deleteOne();
         res.json({ msg: 'Product removed' });
     } catch (err) {
-        console.error(err.message);
-        res.status(500).send('Server Error');
+        console.error('❌ Error in deleteProduct:', err);
+        res.status(500).json({ success: false, message: err.message || 'Server Error' });
     }
 }
 

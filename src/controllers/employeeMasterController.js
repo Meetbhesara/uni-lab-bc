@@ -42,6 +42,7 @@ const storeEmployeeMaster = async (req, res) => {
 
         // If folder created by multer (using req.body.empId) is different, rename it
         const reqEmpId = (req.body.empId || '').toLowerCase();
+        console.log(`[RENAME DEBUG] reqEmpId: "${reqEmpId}", idPart: "${idPart}", condition met: ${!!(reqEmpId && reqEmpId !== idPart)}`);
         if (reqEmpId && reqEmpId !== idPart) {
             const useNas = process.env.USE_NAS === 'true';
             const nasBase = process.env.NAS_BASE_PATH || '/volume1/work';
@@ -51,12 +52,21 @@ const storeEmployeeMaster = async (req, res) => {
             const absoluteLocalBase = path.isAbsolute(localBase) ? localBase : path.join(process.cwd(), localBase);
             const oldDir = path.join(absoluteLocalBase, 'employee_master', tempFolderName);
             const newDir = path.join(absoluteLocalBase, 'employee_master', folderName);
-            if (fs.existsSync(oldDir)) fs.renameSync(oldDir, newDir);
+            console.log(`[RENAME DEBUG] Local oldDir: "${oldDir}", exists: ${fs.existsSync(oldDir)}`);
+            if (fs.existsSync(oldDir)) {
+                console.log(`[RENAME DEBUG] Local rename executing: "${oldDir}" -> "${newDir}"`);
+                fs.renameSync(oldDir, newDir);
+            }
 
+            console.log(`[RENAME DEBUG] useNas: ${useNas}`);
             if (useNas) {
                 const oldNas = path.join(nasBase, 'myapp', 'employee_master', tempFolderName);
                 const newNas = path.join(nasBase, 'myapp', 'employee_master', folderName);
-                if (fs.existsSync(oldNas)) fs.renameSync(oldNas, newNas);
+                console.log(`[RENAME DEBUG] NAS oldNas: "${oldNas}", exists: ${fs.existsSync(oldNas)}`);
+                if (fs.existsSync(oldNas)) {
+                    console.log(`[RENAME DEBUG] NAS rename executing: "${oldNas}" -> "${newNas}"`);
+                    fs.renameSync(oldNas, newNas);
+                }
             }
         }
 

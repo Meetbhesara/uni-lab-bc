@@ -8,16 +8,16 @@ const storeClientMaster = async (req, res) => {
         console.log('Incoming Client Master data:', req.body);
         console.log('Incoming Client Master files:', req.files);
 
-        const { 
-            clientName, 
-            refNo, 
-            email, 
-            contactPersonName, 
-            contactPersonPhone, 
+        const {
+            clientName,
+            refNo,
+            email,
+            contactPersonName,
+            contactPersonPhone,
             panCard,
             clientAddress,
-            gstNo, 
-            msmeNo 
+            gstNo,
+            msmeNo
         } = req.body;
         const files = req.files;
 
@@ -36,21 +36,31 @@ const storeClientMaster = async (req, res) => {
 
         // If folder created by multer (using req.body.clientId) is different, rename it
         const reqClientId = (req.body.clientId || '').toLowerCase();
+        console.log(`[RENAME DEBUG] reqClientId: "${reqClientId}", idPart: "${idPart}", condition met: ${!!(reqClientId && reqClientId !== idPart)}`);
         if (reqClientId && reqClientId !== idPart) {
             const useNas = process.env.USE_NAS === 'true';
             const nasBase = process.env.NAS_BASE_PATH || '/volume1/work';
             const localBase = process.env.LOCAL_BASE_PATH || './uploads';
-            
+
             const tempFolderName = reqClientId;
             const absoluteLocalBase = path.isAbsolute(localBase) ? localBase : path.join(process.cwd(), localBase);
             const oldDir = path.join(absoluteLocalBase, 'client_master', tempFolderName);
             const newDir = path.join(absoluteLocalBase, 'client_master', folderName);
-            if (fs.existsSync(oldDir)) fs.renameSync(oldDir, newDir);
+            console.log(`[RENAME DEBUG] Local oldDir: "${oldDir}", exists: ${fs.existsSync(oldDir)}`);
+            if (fs.existsSync(oldDir)) {
+                console.log(`[RENAME DEBUG] Local rename executing: "${oldDir}" -> "${newDir}"`);
+                fs.renameSync(oldDir, newDir);
+            }
 
+            console.log(`[RENAME DEBUG] useNas: ${useNas}`);
             if (useNas) {
                 const oldNas = path.join(nasBase, 'myapp', 'client_master', tempFolderName);
                 const newNas = path.join(nasBase, 'myapp', 'client_master', folderName);
-                if (fs.existsSync(oldNas)) fs.renameSync(oldNas, newNas);
+                console.log(`[RENAME DEBUG] NAS oldNas: "${oldNas}", exists: ${fs.existsSync(oldNas)}`);
+                if (fs.existsSync(oldNas)) {
+                    console.log(`[RENAME DEBUG] NAS rename executing: "${oldNas}" -> "${newNas}"`);
+                    fs.renameSync(oldNas, newNas);
+                }
             }
         }
 
@@ -58,10 +68,10 @@ const storeClientMaster = async (req, res) => {
         if (files) {
             const processFile = (file, type) => {
                 const f = Array.isArray(file) ? file[0] : file;
-                return { 
-                    name: f.originalname, 
-                    type, 
-                    url: `/uploads/client_master/${folderName}/${path.basename(f.path)}`, 
+                return {
+                    name: f.originalname,
+                    type,
+                    url: `/uploads/client_master/${folderName}/${path.basename(f.path)}`,
                     path: f.path.replace(`-${reqClientId}`, `-${idPart}`)
                 };
             };
@@ -69,20 +79,20 @@ const storeClientMaster = async (req, res) => {
             if (files.msmeCert) documents.push(processFile(files.msmeCert, 'MSME'));
         }
 
-        const record = new ClientMaster({ 
+        const record = new ClientMaster({
             clientId: generatedClientId,
-            clientName: clientName ? clientName.trim() : undefined, 
-            refNo, 
-            email: email ? email.toLowerCase().trim() : undefined, 
+            clientName: clientName ? clientName.trim() : undefined,
+            refNo,
+            email: email ? email.toLowerCase().trim() : undefined,
             contactPerson: {
                 name: contactPersonName,
                 phone: contactPersonPhone
-            }, 
+            },
             panCard,
             clientAddress,
-            gstNo, 
+            gstNo,
             msmeNo,
-            documents 
+            documents
         });
 
         await record.save();
@@ -99,8 +109,8 @@ const updateClientMaster = async (req, res) => {
         const oldRecord = await ClientMaster.findById(_id);
         if (!oldRecord) return res.status(404).json({ success: false, message: 'Client not found' });
 
-        const { 
-            clientName, refNo, email, contactPersonName, contactPersonPhone, panCard, clientAddress, gstNo, msmeNo 
+        const {
+            clientName, refNo, email, contactPersonName, contactPersonPhone, panCard, clientAddress, gstNo, msmeNo
         } = req.body;
         const files = req.files;
 
@@ -227,7 +237,7 @@ const deleteClientMaster = async (req, res) => {
         const _id = req.params.id;
         const record = await ClientMaster.findByIdAndDelete(_id);
         if (!record) return res.status(404).json({ success: false, message: 'Client not found' });
-        
+
         // Delete all sites associated with this client
         const SiteMaster = require('../models/SiteMaster');
         await SiteMaster.deleteMany({ client: _id });
