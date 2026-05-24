@@ -51,7 +51,7 @@ exports.adminAddExpense = async (req, res) => {
                 
                 if (f.fieldname.includes('photos')) photos.push(fileObj);
                 else if (f.fieldname.includes('dailyReports')) dailyReports.push(fileObj);
-                else if (f.fieldname.includes('data')) dataFiles.push(fileObj);
+                else if (f.fieldname.includes('drawing') || f.fieldname.includes('data')) dataFiles.push(fileObj);
                 else if (f.fieldname.startsWith('expense_')) {
                     const expenseName = f.fieldname.split('_')[1];
                     if (expenseFiles[expenseName]) expenseFiles[expenseName].push(fileObj);

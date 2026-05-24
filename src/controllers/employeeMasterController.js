@@ -42,13 +42,15 @@ const storeEmployeeMaster = async (req, res) => {
 
         // If folder created by multer (using req.body.empId) is different, rename it
         const reqEmpId = (req.body.empId || '').toLowerCase();
-        console.log(`[RENAME DEBUG] reqEmpId: "${reqEmpId}", idPart: "${idPart}", condition met: ${!!(reqEmpId && reqEmpId !== idPart)}`);
-        if (reqEmpId && reqEmpId !== idPart) {
+        const tempFolderName = reqEmpId || 'unknown';
+        const conditionMet = tempFolderName !== idPart;
+        console.log(`[RENAME DEBUG] reqEmpId: "${reqEmpId}", idPart: "${idPart}", tempFolderName: "${tempFolderName}", condition met: ${conditionMet}`);
+        if (conditionMet) {
             const useNas = process.env.USE_NAS === 'true';
-            const nasBase = process.env.NAS_BASE_PATH || '/volume1/work';
+            let nasBase = process.env.NAS_BASE_PATH || '/app/storage';
+            if (useNas && !nasBase.startsWith('/')) nasBase = '/' + nasBase;
             const localBase = process.env.LOCAL_BASE_PATH || './uploads';
 
-            const tempFolderName = reqEmpId;
             const absoluteLocalBase = path.isAbsolute(localBase) ? localBase : path.join(process.cwd(), localBase);
             const oldDir = path.join(absoluteLocalBase, 'employee_master', tempFolderName);
             const newDir = path.join(absoluteLocalBase, 'employee_master', folderName);
@@ -60,8 +62,8 @@ const storeEmployeeMaster = async (req, res) => {
 
             console.log(`[RENAME DEBUG] useNas: ${useNas}`);
             if (useNas) {
-                const oldNas = path.join(nasBase, 'myapp', 'employee_master', tempFolderName);
-                const newNas = path.join(nasBase, 'myapp', 'employee_master', folderName);
+                const oldNas = path.join(nasBase, 'employee_master', tempFolderName);
+                const newNas = path.join(nasBase, 'employee_master', folderName);
                 console.log(`[RENAME DEBUG] NAS oldNas: "${oldNas}", exists: ${fs.existsSync(oldNas)}`);
                 if (fs.existsSync(oldNas)) {
                     console.log(`[RENAME DEBUG] NAS rename executing: "${oldNas}" -> "${newNas}"`);
@@ -73,10 +75,17 @@ const storeEmployeeMaster = async (req, res) => {
         const fileToObj = (file) => {
             if (!file) return null;
             const f = Array.isArray(file) ? file[0] : file;
+            
+            // Adjust the saved filesystem path to reflect the renamed directory
+            let finalPath = f.path;
+            finalPath = finalPath
+                .replace(`/employee_master/${tempFolderName}/`, `/employee_master/${folderName}/`)
+                .replace(`\\employee_master\\${tempFolderName}\\`, `\\employee_master\\${folderName}\\`);
+                
             return {
                 name: f.originalname,
                 url: `/uploads/employee_master/${folderName}/${path.basename(f.path)}`,
-                path: f.path.replace(`-${reqEmpId}`, `-${idPart}`) // adjust path if renamed
+                path: finalPath
             };
         };
 
@@ -145,7 +154,8 @@ const updateEmployeeMaster = async (req, res) => {
         // 1. Check if name changed -> rename directory if applicable
         if (oldFolderName !== newFolderName) {
             const useNas = process.env.USE_NAS === 'true';
-            const nasBase = process.env.NAS_BASE_PATH || '/volume1/work';
+            let nasBase = process.env.NAS_BASE_PATH || '/app/storage';
+            if (useNas && !nasBase.startsWith('/')) nasBase = '/' + nasBase;
             const localBase = process.env.LOCAL_BASE_PATH || './uploads';
 
             // Local folder logic
@@ -169,8 +179,8 @@ const updateEmployeeMaster = async (req, res) => {
 
             // NAS folder logic
             if (useNas) {
-                const oldNasDir = path.join(nasBase, 'myapp', 'employee_master', oldFolderName);
-                const newNasDir = path.join(nasBase, 'myapp', 'employee_master', newFolderName);
+                const oldNasDir = path.join(nasBase, 'employee_master', oldFolderName);
+                const newNasDir = path.join(nasBase, 'employee_master', newFolderName);
                 if (fs.existsSync(oldNasDir)) {
                     if (fs.existsSync(newNasDir)) {
                         fs.readdirSync(oldNasDir).forEach(file => {

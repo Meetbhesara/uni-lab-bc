@@ -43,7 +43,10 @@ const storage = multer.diskStorage({
 
             if (file.fieldname.startsWith('expense_')) {
                 const parts = file.fieldname.split('_'); // expense_petrol
-                const expenseName = parts[1];
+                let expenseName = parts[1];
+                if (expenseName === 'petrol') {
+                    expenseName = (req.body.fuelType || 'petrol').toLowerCase();
+                }
                 const empId = req.body.empId || req.body.employeeId || 'unknown_employee';
                 targetDir = useNas 
                     ? path.join(nasBase, 'employee_master', empId, expenseName)
@@ -66,8 +69,8 @@ const storage = multer.diskStorage({
 
             let finalDir = targetDir;
             if (!file.fieldname.startsWith('expense_') && !file.fieldname.startsWith('otherExpense_')) {
-                // Initialize all 3 folders for consistency
-                const subfolders = ['photos', 'Daily_report', 'data'];
+                // Initialize all 4 folders for consistency
+                const subfolders = ['photos', 'Daily_report', 'data', 'drawing'];
                 subfolders.forEach(sub => {
                     const subPath = path.join(targetDir, sub);
                     if (!fs.existsSync(subPath)) fs.mkdirSync(subPath, { recursive: true });
@@ -76,6 +79,7 @@ const storage = multer.diskStorage({
                 let sub = 'data'; 
                 if (file.fieldname.includes('photos')) sub = 'photos';
                 else if (file.fieldname.includes('dailyReports')) sub = 'Daily_report';
+                else if (file.fieldname.includes('drawing')) sub = 'drawing';
                 else if (file.fieldname.includes('data')) sub = 'data';
                 finalDir = path.join(targetDir, sub);
             }
@@ -92,7 +96,10 @@ const storage = multer.diskStorage({
         const dateStr = req.body.date || new Date().toISOString().split('T')[0];
 
         if (file.fieldname.startsWith('expense_')) {
-            const expenseName = file.fieldname.split('_')[1]; // e.g. petrol
+            let expenseName = file.fieldname.split('_')[1]; // e.g. petrol
+            if (expenseName === 'petrol') {
+                expenseName = (req.body.fuelType || 'petrol').toLowerCase();
+            }
             namePrefix = `${expenseName}-${dateStr}`;
         } else if (file.fieldname.startsWith('otherExpense_')) {
             namePrefix = `other_expenses-${dateStr}`;

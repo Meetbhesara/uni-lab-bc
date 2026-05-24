@@ -13,7 +13,8 @@ const EmployeeExpenseSchema = new mongoose.Schema({
     },
     clientSites: [{
         clientId: { type: mongoose.Schema.Types.ObjectId, ref: 'ClientMaster' },
-        siteId: { type: mongoose.Schema.Types.ObjectId, ref: 'SiteMaster' }
+        siteId: { type: mongoose.Schema.Types.ObjectId, ref: 'SiteMaster' },
+        ledger: { type: String, trim: true }
     }],
     expenses: {
         breakfast: { type: Number, default: 0 },

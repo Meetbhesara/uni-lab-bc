@@ -132,6 +132,7 @@ const getSchedules = async (req, res) => {
         }
 
         const schedules = await ScheduleMaster.find(filter)
+            .select('-amount')
             .populate('client', 'clientName clientId')
             .populate('site', 'siteName siteAddress ledgerItems')
             .populate('operative', 'name phone')
