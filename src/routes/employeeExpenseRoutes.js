@@ -92,47 +92,17 @@ const storage = multer.diskStorage({
         }
     },
     filename: (req, file, cb) => {
-        let namePrefix = file.fieldname;
-        const dateStr = req.body.date || new Date().toISOString().split('T')[0];
-
-        if (file.fieldname.startsWith('expense_')) {
-            let expenseName = file.fieldname.split('_')[1]; // e.g. petrol
-            if (expenseName === 'petrol') {
-                expenseName = (req.body.fuelType || 'petrol').toLowerCase();
-            }
-            namePrefix = `${expenseName}-${dateStr}`;
-        } else if (file.fieldname.startsWith('otherExpense_')) {
-            namePrefix = `other_expenses-${dateStr}`;
-        }
-
-        let finalName = namePrefix + path.extname(file.originalname);
-        const finalDir = req.targetDirs ? req.targetDirs[file.fieldname] : null;
-
-        if (finalDir && fs.existsSync(finalDir)) {
-            const existingFiles = fs.readdirSync(finalDir);
-            let numFiles = 1;
-            while(existingFiles.includes(finalName)) {
-                finalName = `${namePrefix} (${numFiles})${path.extname(file.originalname)}`;
-                numFiles++;
-            }
-        } else {
-             // Fallback
-             finalName = namePrefix + '-' + Date.now() + path.extname(file.originalname);
-        }
-
-        cb(null, finalName);
+        const targetDir = file.destination;
+        
+        cb(null, file.originalname);
     }
 });
 
 const upload = multer({ 
     storage,
-    limits: { fileSize: 20 * 1024 * 1024 }, // 20MB
+    limits: { fileSize: 100 * 1024 * 1024 }, // Increased to 100MB to support large drawing files
     fileFilter: (req, file, cb) => {
-        const allowedTypes = /jpeg|jpg|png|pdf|doc|docx|xls|xlsx|csv/;
-        const extname = allowedTypes.test(path.extname(file.originalname).toLowerCase());
-        const mimetype = allowedTypes.test(file.mimetype) || file.mimetype.includes('excel') || file.mimetype.includes('spreadsheetml');
-        if (extname || mimetype) return cb(null, true);
-        cb(new Error('Invalid file type. Allowed: Images, PDFs, Docs, Excel.'));
+        cb(null, true); // No restriction to any type of file
     }
 });
 

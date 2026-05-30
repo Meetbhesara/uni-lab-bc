@@ -41,7 +41,14 @@ const SiteMasterSchema = new mongoose.Schema({
     documents: [{
         name: String,
         url: String,
-        path: String
+        path: String,
+        status: { type: String, default: 'Received' },
+        uploadedAt: { type: Date, default: Date.now },
+        isDraft: { type: Boolean, default: false },
+        linkedDocumentId: { type: String },
+        approvalDate: { type: Date },
+        inMail: { type: Boolean, default: false },
+        mailFolderName: { type: String }
     }],
     status: {
         type: String,

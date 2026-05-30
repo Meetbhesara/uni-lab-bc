@@ -3,13 +3,14 @@ const router = express.Router();
 const multer = require('multer');
 const path = require('path');
 const fs = require('fs');
-const { storeSiteMaster, getSites, getSiteLedgers, getSitesByLedger, updateSiteMaster, deleteSiteMaster, getNextSiteId } = require('../controllers/siteMasterController');
+const { storeSiteMaster, getSites, getSiteLedgers, getSitesByLedger, updateSiteMaster, deleteSiteMaster, getNextSiteId, getAllGlobalDocuments, updateDocumentStatus, moveToMail, deleteGlobalDocument } = require('../controllers/siteMasterController');
 const SiteMaster = require('../models/SiteMaster');
 
 // Add ledger routes
 router.get('/ledgers', getSiteLedgers);
 router.get('/by-ledger/:ledgerName', getSitesByLedger);
 router.get('/next-id/:clientId', getNextSiteId);
+router.post('/move-to-mail', moveToMail);
 
 // Debug route: GET /api/site-master/by-client/:clientId
 router.get('/by-client/:clientId', async (req, res) => {
@@ -64,17 +65,18 @@ const storage = multer.diskStorage({
             if (!fs.existsSync(targetDir)) fs.mkdirSync(targetDir, { recursive: true });
 
             // Initialize subfolders
-            const subfolders = ['photos', 'Daily_report', 'data'];
+            const subfolders = ['photos', 'Daily_report', 'data', 'drafting'];
             subfolders.forEach(sub => {
                 const subPath = path.join(targetDir, sub);
                 if (!fs.existsSync(subPath)) fs.mkdirSync(subPath, { recursive: true });
             });
 
-            // Decide which subfolder to use based on the field name
+            // Decide which subfolder to use based on the field name or documentType
             let sub = 'data'; // default
-            if (file.fieldname === 'photos') sub = 'photos';
-            else if (file.fieldname === 'dailyReports') sub = 'Daily_report';
-            else if (file.fieldname === 'data') sub = 'data';
+            if (file.fieldname === 'photos' || req.body.documentType === 'photos') sub = 'photos';
+            else if (file.fieldname === 'dailyReports' || req.body.documentType === 'dailyReports') sub = 'Daily_report';
+            else if (file.fieldname === 'data' || req.body.documentType === 'data') sub = 'data';
+            else if (file.fieldname === 'draftingWorks' || req.body.documentType === 'drafting' || req.body.documentType === 'drawing') sub = 'drafting';
             else if (file.fieldname === 'docs') sub = ''; // Store directly in targetDir
 
             cb(null, path.join(targetDir, sub));
@@ -84,35 +86,44 @@ const storage = multer.diskStorage({
         }
     },
     filename: (req, file, cb) => {
-        const uniqueSuffix = Date.now() + '-' + Math.round(Math.random() * 1e9);
-        cb(null, file.fieldname + '-' + uniqueSuffix + path.extname(file.originalname));
+        cb(null, file.originalname);
     }
 });
 
 const upload = multer({
     storage,
-    limits: { fileSize: 10 * 1024 * 1024 }, // 10MB limit for site docs
+    limits: { fileSize: 50 * 1024 * 1024 }, // 50MB limit for site docs and CAD drafts
     fileFilter: (req, file, cb) => {
-        const allowedTypes = /jpeg|jpg|png|pdf|doc|docx/;
+        const allowedTypes = /jpeg|jpg|png|pdf|doc|docx|dwg|dxf|xls|xlsx|csv/;
         const extname = allowedTypes.test(path.extname(file.originalname).toLowerCase());
-        const mimetype = allowedTypes.test(file.mimetype);
-        if (extname && mimetype) return cb(null, true);
-        cb(new Error('Images, PDFs, and Word docs are allowed'));
+        const mimetype = true; // allow all mimetypes for CAD which can vary wildly
+        if (extname) return cb(null, true);
+        cb(new Error('Invalid file type uploaded'));
     }
 });
 
 router.post('/', upload.fields([
     { name: 'docs', maxCount: 30 },
     { name: 'photos', maxCount: 30 },
-    { name: 'dailyReports', maxCount: 30 }
+    { name: 'dailyReports', maxCount: 30 },
+    { name: 'draftingWorks', maxCount: 30 },
+    { name: 'data', maxCount: 30 }
 ]), storeSiteMaster);
+
+const { uploadRevision } = require('../controllers/siteMasterController');
+router.post('/upload-revision', upload.single('document'), uploadRevision);
+
+router.put('/document-status', updateDocumentStatus);
+router.delete('/delete-document/:id', deleteGlobalDocument);
 
 router.put('/:id', upload.fields([
     { name: 'docs', maxCount: 30 },
     { name: 'photos', maxCount: 30 },
-    { name: 'dailyReports', maxCount: 30 }
+    { name: 'dailyReports', maxCount: 30 },
+    { name: 'draftingWorks', maxCount: 30 }
 ]), updateSiteMaster);
 router.delete('/:id', deleteSiteMaster);
 router.get('/', getSites);
+router.get('/all-documents', getAllGlobalDocuments);
 
 module.exports = router;

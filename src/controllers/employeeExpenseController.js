@@ -7,7 +7,7 @@ exports.adminAddExpense = async (req, res) => {
     const session = await mongoose.startSession();
     session.startTransaction();
     try {
-        const { employeeId, date, notes, expenses, otherExpensesList, clientSites, attendance, attendanceRemark, givenTo, receivedFrom } = req.body;
+        const { employeeId, date, notes, expenses, otherExpensesList, clientSites, attendance, attendanceRemark, givenTo, receivedFrom, fuelType } = req.body;
         if (!employeeId) return res.status(400).json({ success: false, message: 'Employee ID is required' });
 
         // Parse JSON fields from FormData
@@ -40,6 +40,16 @@ exports.adminAddExpense = async (req, res) => {
         const dailyReports = [];
         const expenseFiles = { breakfast: [], lunch: [], dinner: [], petrol: [] };
 
+        // Initialize files structure in each clientSite
+        parsedClientSites.forEach(cs => {
+            cs.files = {
+                photos: [],
+                dailyReports: [],
+                data: [],
+                drawing: []
+            };
+        });
+
         if (req.files && Array.isArray(req.files)) {
             req.files.forEach(f => {
                 const normalizedPath = f.path.replace(/\\/g, '/');
@@ -49,10 +59,40 @@ exports.adminAddExpense = async (req, res) => {
                 
                 const fileObj = { name: f.originalname, url: fileUrl, path: f.path };
                 
-                if (f.fieldname.includes('photos')) photos.push(fileObj);
-                else if (f.fieldname.includes('dailyReports')) dailyReports.push(fileObj);
-                else if (f.fieldname.includes('drawing') || f.fieldname.includes('data')) dataFiles.push(fileObj);
-                else if (f.fieldname.startsWith('expense_')) {
+                if (f.fieldname.startsWith('site_')) {
+                    const parts = f.fieldname.split('_'); // ['site', '0', 'photos']
+                    const siteIdx = parseInt(parts[1]);
+                    const category = parts[2]; // 'photos', 'dailyReports', 'data', 'drawing'
+                    
+                    if (parsedClientSites[siteIdx]) {
+                        if (!parsedClientSites[siteIdx].files) {
+                            parsedClientSites[siteIdx].files = {
+                                photos: [],
+                                dailyReports: [],
+                                data: [],
+                                drawing: []
+                            };
+                        }
+                        
+                        let mappedCategory = category;
+                        if (category === 'dailyReports') mappedCategory = 'dailyReports';
+                        else if (category === 'data') mappedCategory = 'data';
+                        else if (category === 'drawing') mappedCategory = 'drawing';
+                        else if (category === 'photos') mappedCategory = 'photos';
+                        
+                        if (parsedClientSites[siteIdx].files[mappedCategory]) {
+                            parsedClientSites[siteIdx].files[mappedCategory].push(fileObj);
+                        } else {
+                            parsedClientSites[siteIdx].files[mappedCategory] = [fileObj];
+                        }
+                    }
+                } else if (f.fieldname.includes('photos')) {
+                    photos.push(fileObj);
+                } else if (f.fieldname.includes('dailyReports')) {
+                    dailyReports.push(fileObj);
+                } else if (f.fieldname.includes('drawing') || f.fieldname.includes('data')) {
+                    dataFiles.push(fileObj);
+                } else if (f.fieldname.startsWith('expense_')) {
                     const expenseName = f.fieldname.split('_')[1];
                     if (expenseFiles[expenseName]) expenseFiles[expenseName].push(fileObj);
                 } else if (f.fieldname.startsWith('otherExpense_')) {
@@ -72,29 +112,145 @@ exports.adminAddExpense = async (req, res) => {
             { new: true, session }
         );
 
-        // 4. Save Expense Record
-        const newExpense = new EmployeeExpense({
-            employeeId,
-            date: date || new Date(),
-            clientSites: parsedClientSites,
-            expenses: parsedExpenses,
-            expenseFiles,
-            otherExpensesList: parsedOtherExpenses,
-            totalExpense,
-            remainingBalance: employee.totalAmount,
-            notes,
-            attendance: attendance || 'Present',
-            attendanceRemark,
-            creditDebit: {
-                givenTo: parsedGivenTo,
-                receivedFrom: parsedReceivedFrom
-            },
-            photos,
-            dataFiles,
-            dailyReports
-        });
+        // 4. Save Expense Record (Merge into existing record if employee and date match)
+        const targetDate = new Date(date || new Date());
+        const startOfDay = new Date(targetDate);
+        startOfDay.setHours(0,0,0,0);
+        const endOfDay = new Date(targetDate);
+        endOfDay.setHours(23,59,59,999);
 
-        await newExpense.save({ session });
+        let existingExpense = await EmployeeExpense.findOne({
+            employeeId,
+            date: { $gte: startOfDay, $lte: endOfDay }
+        }).session(session);
+
+        let savedExpense;
+
+        if (existingExpense) {
+            // MERGE INTO EXISTING RECORD
+            existingExpense.attendance = attendance || existingExpense.attendance;
+            if (attendanceRemark) {
+                existingExpense.attendanceRemark = existingExpense.attendanceRemark 
+                    ? `${existingExpense.attendanceRemark}; ${attendanceRemark}` 
+                    : attendanceRemark;
+            }
+            if (notes) {
+                existingExpense.notes = existingExpense.notes ? `${existingExpense.notes}\n${notes}` : notes;
+            }
+
+            // Merge clientSites
+            parsedClientSites.forEach(newSite => {
+                const existingSite = existingExpense.clientSites.find(cs => 
+                    String(cs.siteId) === String(newSite.siteId) && 
+                    String(cs.clientId) === String(newSite.clientId) && 
+                    String(cs.ledger || '') === String(newSite.ledger || '')
+                );
+                if (existingSite) {
+                    if (newSite.files) {
+                        ['photos', 'dailyReports', 'data', 'drawing'].forEach(cat => {
+                            if (newSite.files[cat] && newSite.files[cat].length > 0) {
+                                if (!existingSite.files) existingSite.files = { photos: [], dailyReports: [], data: [], drawing: [] };
+                                if (!existingSite.files[cat]) existingSite.files[cat] = [];
+                                existingSite.files[cat].push(...newSite.files[cat]);
+                            }
+                        });
+                    }
+                } else {
+                    existingExpense.clientSites.push(newSite);
+                }
+            });
+
+            // Merge expenses
+            if (!existingExpense.expenses) {
+                existingExpense.expenses = { breakfast: 0, lunch: 0, dinner: 0, petrol: 0 };
+            }
+            ['breakfast', 'lunch', 'dinner', 'petrol'].forEach(key => {
+                existingExpense.expenses[key] = (Number(existingExpense.expenses[key]) || 0) + (Number(parsedExpenses[key]) || 0);
+            });
+            if (fuelType) {
+                existingExpense.expenses.fuelType = fuelType;
+            }
+
+            // Merge expenseFiles
+            if (!existingExpense.expenseFiles) {
+                existingExpense.expenseFiles = { breakfast: [], lunch: [], dinner: [], petrol: [] };
+            }
+            ['breakfast', 'lunch', 'dinner', 'petrol'].forEach(key => {
+                if (expenseFiles[key] && expenseFiles[key].length > 0) {
+                    if (!existingExpense.expenseFiles[key]) existingExpense.expenseFiles[key] = [];
+                    existingExpense.expenseFiles[key].push(...expenseFiles[key]);
+                }
+            });
+
+            // Merge other expenses
+            if (parsedOtherExpenses && parsedOtherExpenses.length > 0) {
+                if (!existingExpense.otherExpensesList) existingExpense.otherExpensesList = [];
+                existingExpense.otherExpensesList.push(...parsedOtherExpenses);
+            }
+
+            // Merge Givers and Takers
+            if (!existingExpense.creditDebit) {
+                existingExpense.creditDebit = { givenTo: [], receivedFrom: [] };
+            }
+            if (parsedGivenTo && parsedGivenTo.length > 0) {
+                if (!existingExpense.creditDebit.givenTo) existingExpense.creditDebit.givenTo = [];
+                existingExpense.creditDebit.givenTo.push(...parsedGivenTo);
+            }
+            if (parsedReceivedFrom && parsedReceivedFrom.length > 0) {
+                if (!existingExpense.creditDebit.receivedFrom) existingExpense.creditDebit.receivedFrom = [];
+                existingExpense.creditDebit.receivedFrom.push(...parsedReceivedFrom);
+            }
+
+            // Merge photos, dataFiles, dailyReports
+            if (photos.length > 0) {
+                if (!existingExpense.photos) existingExpense.photos = [];
+                existingExpense.photos.push(...photos);
+            }
+            if (dataFiles.length > 0) {
+                if (!existingExpense.dataFiles) existingExpense.dataFiles = [];
+                existingExpense.dataFiles.push(...dataFiles);
+            }
+            if (dailyReports.length > 0) {
+                if (!existingExpense.dailyReports) existingExpense.dailyReports = [];
+                existingExpense.dailyReports.push(...dailyReports);
+            }
+
+            // Recalculate Totals
+            const newStandardTotal = (Number(existingExpense.expenses.breakfast) || 0) + 
+                                     (Number(existingExpense.expenses.lunch) || 0) + 
+                                     (Number(existingExpense.expenses.dinner) || 0) + 
+                                     (Number(existingExpense.expenses.petrol) || 0);
+            
+            const newOtherTotal = (existingExpense.otherExpensesList || []).reduce((acc, curr) => acc + (Number(curr.amount) || 0), 0);
+            
+            existingExpense.totalExpense = newStandardTotal + newOtherTotal;
+            existingExpense.remainingBalance = employee.totalAmount;
+
+            savedExpense = await existingExpense.save({ session });
+        } else {
+            // SAVE AS NEW EXPENSE RECORD
+            const newExpense = new EmployeeExpense({
+                employeeId,
+                date: date || new Date(),
+                clientSites: parsedClientSites,
+                expenses: parsedExpenses,
+                expenseFiles,
+                otherExpensesList: parsedOtherExpenses,
+                totalExpense,
+                remainingBalance: employee.totalAmount,
+                notes,
+                attendance: attendance || 'Present',
+                attendanceRemark,
+                creditDebit: {
+                    givenTo: parsedGivenTo,
+                    receivedFrom: parsedReceivedFrom
+                },
+                photos,
+                dataFiles,
+                dailyReports
+            });
+            savedExpense = await newExpense.save({ session });
+        }
 
         const expenseDate = date || new Date();
 
@@ -106,8 +262,10 @@ exports.adminAddExpense = async (req, res) => {
                 amount: totalExpense,
                 type: 'Debit',
                 category: 'Expense',
-                description: `Daily Expense on ${new Date(expenseDate).toLocaleDateString()}`,
-                referenceId: newExpense._id
+                description: existingExpense 
+                    ? `Daily Expense Addition on ${new Date(expenseDate).toLocaleDateString()}`
+                    : `Daily Expense on ${new Date(expenseDate).toLocaleDateString()}`,
+                referenceId: savedExpense._id
             }).save({ session });
         }
 
@@ -126,7 +284,7 @@ exports.adminAddExpense = async (req, res) => {
                     category: 'Transfer',
                     description: `Money Given to employee`,
                     relatedEmployee: item.employeeRef,
-                    referenceId: newExpense._id
+                    referenceId: savedExpense._id
                 }).save({ session });
 
                 // Ledger for Taker
@@ -138,7 +296,7 @@ exports.adminAddExpense = async (req, res) => {
                     category: 'Transfer',
                     description: `Money Received from ${employee.name}`,
                     relatedEmployee: employeeId,
-                    referenceId: newExpense._id
+                    referenceId: savedExpense._id
                 }).save({ session });
             }
         }
@@ -158,7 +316,7 @@ exports.adminAddExpense = async (req, res) => {
                     category: 'Transfer',
                     description: `Money Received from employee`,
                     relatedEmployee: item.employeeRef,
-                    referenceId: newExpense._id
+                    referenceId: savedExpense._id
                 }).save({ session });
 
                 // Ledger for Giver
@@ -170,7 +328,7 @@ exports.adminAddExpense = async (req, res) => {
                     category: 'Transfer',
                     description: `Money Given to ${employee.name}`,
                     relatedEmployee: employeeId,
-                    referenceId: newExpense._id
+                    referenceId: savedExpense._id
                 }).save({ session });
             }
         }
@@ -180,8 +338,8 @@ exports.adminAddExpense = async (req, res) => {
 
         res.status(201).json({ 
             success: true, 
-            message: 'Expense saved and balance updated', 
-            data: newExpense,
+            message: existingExpense ? 'Expense merged and balance updated' : 'Expense saved and balance updated', 
+            data: savedExpense,
             updatedEmployee: employee
         });
     } catch (error) {
