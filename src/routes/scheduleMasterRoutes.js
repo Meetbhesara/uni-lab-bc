@@ -3,7 +3,7 @@ const router = express.Router();
 const multer = require('multer');
 const path = require('path');
 const fs = require('fs');
-const { createSchedule, updateSchedule, getSchedules, getSitesByClient, completeSchedule, rejectSchedule } = require('../controllers/scheduleMasterController');
+const { createSchedule, updateSchedule, getSchedules, getSitesByClient, completeSchedule, rejectSchedule, updateInvoiceStatus, pauseMonth, resumeMonth } = require('../controllers/scheduleMasterController');
 
 // --- Multer Storage for Completion Files ---
 const storage = multer.diskStorage({
@@ -73,5 +73,14 @@ router.post('/complete/:id', upload.fields([
 
 // PUT /api/schedule-master/reject/:id (Reject a schedule)
 router.put('/reject/:id', rejectSchedule);
+
+// PATCH /api/schedule-master/invoice-status/:id (Update invoice bill status)
+router.patch('/invoice-status/:id', updateInvoiceStatus);
+
+// DELETE /api/schedule-master/pause-month/:client/:site (Pause month schedule)
+router.delete('/pause-month/:client/:site', pauseMonth);
+
+// POST /api/schedule-master/resume-month (Resume month schedule)
+router.post('/resume-month', resumeMonth);
 
 module.exports = router;

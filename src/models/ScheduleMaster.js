@@ -49,7 +49,7 @@ const ScheduleMasterSchema = new mongoose.Schema({
     },
     dayStatus: {
         type: String,
-        enum: ['Scheduled', 'Completed', 'Rejected'],
+        enum: ['Scheduled', 'Completed', 'Rejected', 'Paused'],
         default: 'Scheduled'
     },
     vehicle: {
@@ -60,10 +60,26 @@ const ScheduleMasterSchema = new mongoose.Schema({
         type: mongoose.Schema.Types.ObjectId,
         ref: 'InstrumentMaster'
     }],
+    scheduleType: {
+        type: String,
+        enum: ['VISIT', 'MONTH', 'TOPOGRAPHY SURVEY', ''],
+        default: 'VISIT'
+    },
+    monthGroupId: {
+        type: Number
+    },
+    endDate: {
+        type: Date
+    },
     status: {
         type: String,
         enum: ['Active', 'Deactive'],
         default: 'Active'
+    },
+    invoiceStatus: {
+        type: String,
+        enum: ['Pending', 'Completed'],
+        default: 'Pending'
     }
 }, { timestamps: true });
 

@@ -12,6 +12,7 @@ const EmployeeExpenseSchema = new mongoose.Schema({
         required: true
     },
     clientSites: [{
+        scheduleId: { type: mongoose.Schema.Types.ObjectId, ref: 'ScheduleMaster' },
         clientId: { type: mongoose.Schema.Types.ObjectId, ref: 'ClientMaster' },
         siteId: { type: mongoose.Schema.Types.ObjectId, ref: 'SiteMaster' },
         ledger: { type: String, trim: true },

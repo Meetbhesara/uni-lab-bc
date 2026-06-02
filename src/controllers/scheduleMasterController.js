@@ -1,19 +1,56 @@
 const ScheduleMaster = require('../models/ScheduleMaster');
 const SiteMaster = require('../models/SiteMaster');
 const ClientMaster = require('../models/ClientMaster');
+const EmployeeExpense = require('../models/EmployeeExpense');
 const mongoose = require('mongoose');
 const path = require('path');
 
 // POST - Create a new schedule
 const createSchedule = async (req, res) => {
     try {
-        const { client, site, scheduleDate, workForAppley, operative, helpers, notes, status, dayStatus, ledger, amount, vehicle, instruments } = req.body;
+        const { client, site, scheduleDate, endDate, workForAppley, operative, helpers, notes, status, dayStatus, ledger, amount, vehicle, instruments, scheduleType } = req.body;
 
         if (!client || !site || !scheduleDate) {
             return res.status(400).json({
                 success: false,
                 message: 'Client, site, and schedule date are required'
             });
+        }
+
+        if (scheduleType === 'MONTH' && endDate) {
+            const start = new Date(scheduleDate);
+            const end = new Date(endDate);
+            // Find the highest monthGroupId for this client and site
+            const lastGroup = await ScheduleMaster.findOne({
+                client,
+                site,
+                scheduleType: 'MONTH'
+            }).sort({ monthGroupId: -1 });
+
+            const newGroupId = (lastGroup && lastGroup.monthGroupId) ? lastGroup.monthGroupId + 1 : 1;
+            
+            // Only create ONE schedule for the start date. The daily cron/rollover will generate subsequent days.
+            const newSchedule = new ScheduleMaster({
+                client,
+                site,
+                scheduleDate: new Date(start),
+                endDate: new Date(endDate),
+                workForAppley,
+                operative: operative || undefined,
+                helpers: helpers || [],
+                ledger,
+                amount,
+                notes,
+                vehicle: vehicle || null,
+                instruments: instruments || [],
+                status: status || 'Active',
+                dayStatus: dayStatus || 'Scheduled',
+                scheduleType: scheduleType || 'VISIT',
+                monthGroupId: newGroupId
+            });
+
+            await newSchedule.save();
+            return res.status(201).json({ success: true, message: `Successfully created the initial month schedule.` });
         }
 
         const schedule = new ScheduleMaster({
@@ -29,7 +66,8 @@ const createSchedule = async (req, res) => {
             vehicle: vehicle || null,
             instruments: instruments || [],
             status: status || 'Active',
-            dayStatus: dayStatus || 'Scheduled'
+            dayStatus: dayStatus || 'Scheduled',
+            scheduleType: scheduleType || 'VISIT'
         });
 
         await schedule.save();
@@ -55,7 +93,7 @@ const updateSchedule = async (req, res) => {
         // Only update fields that are actually provided
         const updates = {};
         const unsets = {};
-        const allowedFields = ['client', 'site', 'scheduleDate', 'workForAppley', 'operative', 'helpers', 'notes', 'status', 'dayStatus', 'ledger', 'amount', 'vehicle', 'instruments'];
+        const allowedFields = ['client', 'site', 'scheduleDate', 'workForAppley', 'operative', 'helpers', 'notes', 'status', 'dayStatus', 'ledger', 'amount', 'vehicle', 'instruments', 'scheduleType'];
         allowedFields.forEach(field => {
             if (req.body[field] !== undefined) {
                 // If the field is an ObjectId field and is an empty string, set it to undefined/null
@@ -96,6 +134,41 @@ const updateSchedule = async (req, res) => {
             return res.status(404).json({ success: false, message: 'Schedule not found' });
         }
 
+        // Logic for "Include Sunday" from operative allocation
+        if (req.body.includeSunday === true && schedule.scheduleType === 'MONTH' && schedule.scheduleDate) {
+            const currentDay = new Date(schedule.scheduleDate);
+            if (currentDay.getDay() === 6) { // If it's Saturday
+                const nextSunday = new Date(currentDay);
+                nextSunday.setDate(nextSunday.getDate() + 1);
+                
+                const existingSunday = await ScheduleMaster.findOne({
+                    client: schedule.client._id,
+                    site: schedule.site._id,
+                    scheduleDate: nextSunday,
+                    scheduleType: 'MONTH'
+                });
+
+                if (!existingSunday) {
+                    await ScheduleMaster.create({
+                        client: schedule.client._id,
+                        site: schedule.site._id,
+                        scheduleDate: nextSunday,
+                        workForAppley: schedule.workForAppley,
+                        operative: schedule.operative ? schedule.operative._id : null,
+                        helpers: schedule.helpers ? schedule.helpers.map(h => h._id) : [],
+                        vehicle: schedule.vehicle ? schedule.vehicle._id : null,
+                        instruments: schedule.instruments ? schedule.instruments.map(i => i._id) : [],
+                        ledger: schedule.ledger,
+                        amount: schedule.amount,
+                        scheduleType: 'MONTH',
+                        monthGroupId: schedule.monthGroupId,
+                        dayStatus: 'Scheduled',
+                        status: 'Active'
+                    });
+                }
+            }
+        }
+
         res.json({ success: true, message: 'Schedule updated successfully', data: schedule });
     } catch (error) {
         console.error('Error in updateSchedule:', error);
@@ -106,6 +179,94 @@ const updateSchedule = async (req, res) => {
 // GET - Get schedules with optional date filter
 const getSchedules = async (req, res) => {
     try {
+        // Auto-rollover overdue schedules (before today, and not Completed/Rejected) to the next day
+        const todayStart = new Date();
+        todayStart.setHours(0, 0, 0, 0);
+        
+        const cronCutoffDate = new Date('2026-06-01T00:00:00.000Z');
+
+        const overdueSchedules = await ScheduleMaster.find({
+            scheduleDate: { $gte: cronCutoffDate, $lt: todayStart },
+            dayStatus: { $nin: ['Completed', 'Rejected'] },
+            scheduleType: { $ne: 'MONTH' }
+        });
+
+        for (const schedule of overdueSchedules) {
+            try {
+                if (!schedule.scheduleDate) continue;
+                const nextDay = new Date(schedule.scheduleDate);
+                nextDay.setDate(nextDay.getDate() + 1);
+
+                let targetDate;
+                if (nextDay < todayStart) {
+                    const today = new Date();
+                    today.setHours(nextDay.getHours(), nextDay.getMinutes(), nextDay.getSeconds(), nextDay.getMilliseconds());
+                    targetDate = today;
+                } else {
+                    targetDate = nextDay;
+                }
+
+                // Use updateOne to bypass mongoose validation checks on unrelated legacy fields
+                await ScheduleMaster.updateOne(
+                    { _id: schedule._id },
+                    { $set: { scheduleDate: targetDate } }
+                );
+            } catch (err) {
+                console.error('Failed to rollover schedule:', schedule._id, err.message);
+            }
+        }
+
+        // Auto-generate the next day for MONTH schedules (if not Paused/Rejected and within endDate)
+        const activeMonthSchedules = await ScheduleMaster.find({
+            scheduleType: 'MONTH',
+            dayStatus: { $nin: ['Paused', 'Rejected'] },
+            scheduleDate: { $gte: cronCutoffDate, $lt: todayStart }
+        }).sort({ scheduleDate: -1 });
+
+        const processedGroups = new Set();
+        for (const doc of activeMonthSchedules) {
+            if (!doc.monthGroupId || processedGroups.has(doc.monthGroupId)) continue;
+            processedGroups.add(doc.monthGroupId); // Only process the latest schedule for each group
+
+            if (!doc.endDate) continue;
+            const endDateObj = new Date(doc.endDate);
+            endDateObj.setHours(0, 0, 0, 0);
+
+            if (todayStart <= endDateObj) {
+                try {
+                    // Check if today's schedule was already generated somehow to prevent duplicates
+                    const exists = await ScheduleMaster.findOne({
+                        monthGroupId: doc.monthGroupId,
+                        scheduleDate: { $gte: todayStart }
+                    });
+
+                    if (!exists) {
+                        const newSchedule = new ScheduleMaster({
+                            client: doc.client,
+                            site: doc.site,
+                            scheduleDate: todayStart,
+                            endDate: doc.endDate,
+                            workForAppley: doc.workForAppley,
+                            operative: doc.operative,
+                            helpers: doc.helpers,
+                            ledger: doc.ledger,
+                            amount: doc.amount,
+                            notes: doc.notes,
+                            vehicle: doc.vehicle,
+                            instruments: doc.instruments,
+                            status: doc.status,
+                            dayStatus: 'Scheduled',
+                            scheduleType: 'MONTH',
+                            monthGroupId: doc.monthGroupId
+                        });
+                        await newSchedule.save();
+                    }
+                } catch (err) {
+                    console.error('Failed to generate next month schedule:', doc._id, err.message);
+                }
+            }
+        }
+
         const { date, startDate, endDate, client, site } = req.query;
         const filter = {};
 
@@ -121,6 +282,8 @@ const getSchedules = async (req, res) => {
 
         if (client) filter.client = client;
         if (site) filter.site = site;
+        if (req.query.scheduleType) filter.scheduleType = req.query.scheduleType;
+        if (req.query.invoiceStatus) filter.invoiceStatus = req.query.invoiceStatus;
         
         // Add employee filtering logic (if assigned as leader OR helper)
         const { employee } = req.query;
@@ -132,14 +295,44 @@ const getSchedules = async (req, res) => {
         }
 
         const schedules = await ScheduleMaster.find(filter)
-            .select('-amount')
+            
             .populate('client', 'clientName clientId')
             .populate('site', 'siteName siteAddress ledgerItems')
             .populate('operative', 'name phone')
             .populate('helpers', 'name phone')
             .populate('vehicle', 'vehicleNumber vehicleName')
             .populate('instruments', 'instrumentName serialNo model')
-            .sort({ scheduleDate: 1 });
+            .sort({ scheduleDate: 1 })
+            .lean(); // Use lean to allow modification
+
+        // Fetch documents from EmployeeExpense for each schedule
+        const scheduleIds = schedules.map(s => s._id);
+        const expenses = await EmployeeExpense.find({ "clientSites.scheduleId": { $in: scheduleIds } });
+
+        for (let s of schedules) {
+            let docs = [];
+            
+            // Collect any documents attached directly to the site or schedule via completeSchedule modal
+            if (s.site?.documents) {
+                docs.push(...s.site.documents);
+            }
+            
+            // Collect documents uploaded via Employee Expenses (Daily Report)
+            expenses.forEach(e => {
+                const cs = e.clientSites.find(c => String(c.scheduleId) === String(s._id));
+                if (cs && cs.files) {
+                    ['photos', 'dailyReports', 'data', 'drawing'].forEach(cat => {
+                        if (cs.files[cat]) {
+                            cs.files[cat].forEach(f => {
+                                docs.push({ name: f.name, url: f.url, uploadedAt: e.date || new Date() });
+                            });
+                        }
+                    });
+                }
+            });
+            
+            s.uploadedDocuments = docs;
+        }
 
         res.json({ success: true, data: schedules });
     } catch (error) {
@@ -216,7 +409,7 @@ const completeSchedule = async (req, res) => {
 
         // Mark schedule as completed
         schedule.dayStatus = 'Completed';
-        await schedule.save();
+        await schedule.save({ validateBeforeSave: false });
 
         res.json({
             success: true,
@@ -238,7 +431,7 @@ const rejectSchedule = async (req, res) => {
             return res.status(404).json({ success: false, message: 'Schedule not found' });
         }
         schedule.dayStatus = 'Rejected';
-        await schedule.save();
+        await schedule.save({ validateBeforeSave: false });
 
         res.json({ success: true, message: 'Schedule marked as rejected', data: schedule });
     } catch (error) {
@@ -247,4 +440,108 @@ const rejectSchedule = async (req, res) => {
     }
 };
 
-module.exports = { createSchedule, updateSchedule, getSchedules, getSitesByClient, completeSchedule, rejectSchedule };
+// PATCH - Update invoice status (Pending <-> Completed)
+const updateInvoiceStatus = async (req, res) => {
+    try {
+        const { id } = req.params;
+        const { invoiceStatus } = req.body;
+        if (!['Pending', 'Completed'].includes(invoiceStatus)) {
+            return res.status(400).json({ success: false, message: 'Invalid invoice status' });
+        }
+        await ScheduleMaster.updateOne({ _id: id }, { $set: { invoiceStatus } });
+        res.json({ success: true, message: `Invoice marked as ${invoiceStatus}` });
+    } catch (error) {
+        res.status(500).json({ success: false, message: error.message });
+    }
+};
+
+const pauseMonth = async (req, res) => {
+    try {
+        const { client, site } = req.params;
+        const today = new Date();
+        today.setHours(0, 0, 0, 0);
+
+        const result = await ScheduleMaster.updateMany({
+            client,
+            site,
+            scheduleType: 'MONTH',
+            dayStatus: 'Scheduled',
+            scheduleDate: { $gte: today }
+        }, { $set: { dayStatus: 'Paused' } });
+
+        res.json({ success: true, message: `Paused month schedule. Paused ${result.modifiedCount} upcoming schedules.` });
+    } catch (error) {
+        res.status(500).json({ success: false, message: error.message });
+    }
+};
+
+const resumeMonth = async (req, res) => {
+    try {
+        const { client, site, endDate, workForAppley, operative, ledger, amount } = req.body;
+        
+        if (!endDate) return res.status(400).json({ success: false, message: 'End date is required to resume' });
+
+        const end = new Date(endDate);
+        const today = new Date();
+        today.setHours(0, 0, 0, 0);
+
+        // 1. Un-pause existing schedules up to endDate
+        await ScheduleMaster.updateMany({
+            client,
+            site,
+            scheduleType: 'MONTH',
+            dayStatus: 'Paused',
+            scheduleDate: { $lte: end, $gte: today }
+        }, { $set: { dayStatus: 'Scheduled' } });
+
+        // 2. Remove any remaining Paused schedules beyond endDate (they shortened the contract)
+        await ScheduleMaster.deleteMany({
+            client,
+            site,
+            scheduleType: 'MONTH',
+            dayStatus: 'Paused',
+            scheduleDate: { $gt: end }
+        });
+
+        // 3. Find if we need to extend the schedule (if endDate is beyond what was previously generated)
+        const lastSchedule = await ScheduleMaster.findOne({
+            client,
+            site,
+            scheduleType: 'MONTH'
+        }).sort({ scheduleDate: -1 });
+
+        let startGenerate = new Date(today);
+        startGenerate.setDate(startGenerate.getDate() + 1); // default to tomorrow
+
+        if (lastSchedule && lastSchedule.scheduleDate >= today) {
+            startGenerate = new Date(lastSchedule.scheduleDate);
+            startGenerate.setDate(startGenerate.getDate() + 1);
+        }
+
+        const schedulesToInsert = [];
+        const includeSundays = req.body.includeSundays === true;
+        
+        const groupToUse = (lastSchedule && lastSchedule.monthGroupId) ? lastSchedule.monthGroupId : 1;
+
+        for (let d = new Date(startGenerate); d <= end; d.setDate(d.getDate() + 1)) {
+            if (!includeSundays && d.getDay() === 0) continue; // Skip Sundays unless allowed
+            
+            schedulesToInsert.push({
+                client, site, scheduleDate: new Date(d), workForAppley,
+                operative, ledger, amount, scheduleType: 'MONTH',
+                monthGroupId: groupToUse,
+                dayStatus: 'Scheduled', status: 'Active'
+            });
+        }
+
+        if (schedulesToInsert.length > 0) {
+            await ScheduleMaster.insertMany(schedulesToInsert);
+        }
+
+        res.json({ success: true, message: `Resumed month schedule up to ${end.toDateString()}.` });
+    } catch (error) {
+        res.status(500).json({ success: false, message: error.message });
+    }
+};
+
+module.exports = { createSchedule, updateSchedule, getSchedules, getSitesByClient, completeSchedule, rejectSchedule, updateInvoiceStatus, pauseMonth, resumeMonth };

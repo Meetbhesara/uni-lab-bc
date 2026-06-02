@@ -16,6 +16,8 @@ exports.adminAddExpense = async (req, res) => {
         const parsedClientSites = typeof clientSites === 'string' ? JSON.parse(clientSites) : (clientSites || []);
         const parsedGivenTo = typeof givenTo === 'string' ? JSON.parse(givenTo) : (givenTo || []);
         const parsedReceivedFrom = typeof receivedFrom === 'string' ? JSON.parse(receivedFrom) : (receivedFrom || []);
+        const { deletedExistingFiles } = req.body;
+        const parsedDeletedExistingFiles = typeof deletedExistingFiles === 'string' ? JSON.parse(deletedExistingFiles) : (deletedExistingFiles || []);
 
         // 1. Calculate Totals
         const standardTotal = (Number(parsedExpenses.breakfast) || 0) + 
@@ -137,15 +139,45 @@ exports.adminAddExpense = async (req, res) => {
             if (notes) {
                 existingExpense.notes = existingExpense.notes ? `${existingExpense.notes}\n${notes}` : notes;
             }
+            
+            // Process deleted existing files
+            if (parsedDeletedExistingFiles && parsedDeletedExistingFiles.length > 0) {
+                existingExpense.clientSites.forEach(cs => {
+                    if (cs.files) {
+                        ['photos', 'dailyReports', 'data', 'drawing'].forEach(cat => {
+                            if (cs.files[cat] && cs.files[cat].length > 0) {
+                                cs.files[cat] = cs.files[cat].filter(f => !parsedDeletedExistingFiles.includes(f.url));
+                            }
+                        });
+                    }
+                });
+                
+                ['photos', 'dataFiles', 'dailyReports'].forEach(cat => {
+                    if (existingExpense[cat] && existingExpense[cat].length > 0) {
+                        existingExpense[cat] = existingExpense[cat].filter(f => !parsedDeletedExistingFiles.includes(f.url));
+                    }
+                });
+            }
 
             // Merge clientSites
-            parsedClientSites.forEach(newSite => {
+            for (const newSite of parsedClientSites) {
                 const existingSite = existingExpense.clientSites.find(cs => 
-                    String(cs.siteId) === String(newSite.siteId) && 
-                    String(cs.clientId) === String(newSite.clientId) && 
-                    String(cs.ledger || '') === String(newSite.ledger || '')
+                    (newSite.scheduleId && String(cs.scheduleId) === String(newSite.scheduleId)) ||
+                    (!newSite.scheduleId && String(cs.siteId) === String(newSite.siteId) && String(cs.clientId) === String(newSite.clientId))
                 );
+                
+                // Update ScheduleMaster ledger if provided and a scheduleId is present
+                if (newSite.scheduleId && newSite.ledger) {
+                    await mongoose.model('ScheduleMaster').findByIdAndUpdate(
+                        newSite.scheduleId,
+                        { ledger: newSite.ledger },
+                        { session }
+                    );
+                }
                 if (existingSite) {
+                    // Update ledger if it changed
+                    if (newSite.ledger) existingSite.ledger = newSite.ledger;
+                    
                     if (newSite.files) {
                         ['photos', 'dailyReports', 'data', 'drawing'].forEach(cat => {
                             if (newSite.files[cat] && newSite.files[cat].length > 0) {
@@ -158,7 +190,7 @@ exports.adminAddExpense = async (req, res) => {
                 } else {
                     existingExpense.clientSites.push(newSite);
                 }
-            });
+            }
 
             // Merge expenses
             if (!existingExpense.expenses) {
@@ -250,6 +282,17 @@ exports.adminAddExpense = async (req, res) => {
                 dailyReports
             });
             savedExpense = await newExpense.save({ session });
+            
+            // Update ScheduleMaster ledger if provided and a scheduleId is present
+            for (const newSite of parsedClientSites) {
+                if (newSite.scheduleId && newSite.ledger) {
+                    await mongoose.model('ScheduleMaster').findByIdAndUpdate(
+                        newSite.scheduleId,
+                        { ledger: newSite.ledger },
+                        { session }
+                    );
+                }
+            }
         }
 
         const expenseDate = date || new Date();
