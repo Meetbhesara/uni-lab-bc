@@ -134,6 +134,23 @@ const updateSchedule = async (req, res) => {
             return res.status(404).json({ success: false, message: 'Schedule not found' });
         }
 
+        // Cascade resource updates to future uncompleted schedules in the same month contract
+        if (schedule.scheduleType === 'MONTH' && schedule.monthGroupId && schedule.scheduleDate) {
+            const cascadeUpdates = {};
+            if (updates.operative !== undefined) cascadeUpdates.operative = updates.operative;
+            if (updates.helpers !== undefined) cascadeUpdates.helpers = updates.helpers;
+            if (updates.vehicle !== undefined) cascadeUpdates.vehicle = updates.vehicle;
+            if (updates.instruments !== undefined) cascadeUpdates.instruments = updates.instruments;
+
+            if (Object.keys(cascadeUpdates).length > 0) {
+                await ScheduleMaster.updateMany({
+                    monthGroupId: schedule.monthGroupId,
+                    scheduleDate: { $gt: schedule.scheduleDate },
+                    dayStatus: { $nin: ['Completed', 'Rejected'] }
+                }, { $set: cascadeUpdates });
+            }
+        }
+
         // Logic for "Include Sunday" from operative allocation
         if (req.body.includeSunday === true && schedule.scheduleType === 'MONTH' && schedule.scheduleDate) {
             const currentDay = new Date(schedule.scheduleDate);
@@ -188,7 +205,8 @@ const getSchedules = async (req, res) => {
         const overdueSchedules = await ScheduleMaster.find({
             scheduleDate: { $gte: cronCutoffDate, $lt: todayStart },
             dayStatus: { $nin: ['Completed', 'Rejected'] },
-            scheduleType: { $ne: 'MONTH' }
+            scheduleType: { $ne: 'MONTH' },
+            operative: null // ONLY roll over if operative is unassigned
         });
 
         for (const schedule of overdueSchedules) {
@@ -273,9 +291,18 @@ const getSchedules = async (req, res) => {
         // Date-wise filtering
         if (date) {
             const d = new Date(date);
-            const nextDay = new Date(d);
-            nextDay.setDate(d.getDate() + 1);
-            filter.scheduleDate = { $gte: d, $lt: nextDay };
+            const todayStr = new Date().toISOString().split('T')[0];
+            const queryDateStr = d.toISOString().split('T')[0];
+
+            if (queryDateStr === todayStr) {
+                // If query is today, fetch today AND future data!
+                filter.scheduleDate = { $gte: d };
+            } else {
+                // If past date (or specific future date selected via calendar), fetch ONLY that specific day
+                const nextDay = new Date(d);
+                nextDay.setDate(d.getDate() + 1);
+                filter.scheduleDate = { $gte: d, $lt: nextDay };
+            }
         } else if (startDate && endDate) {
             filter.scheduleDate = { $gte: new Date(startDate), $lte: new Date(endDate) };
         }
@@ -328,6 +355,26 @@ const getSchedules = async (req, res) => {
                             });
                         }
                     });
+                }
+                
+                // Add top-level expense documents if this expense is linked to this schedule
+                if (cs) {
+                    if (e.photos) e.photos.forEach(f => docs.push({ name: f.name, url: f.url, uploadedAt: e.date }));
+                    if (e.dataFiles) e.dataFiles.forEach(f => docs.push({ name: f.name, url: f.url, uploadedAt: e.date }));
+                    if (e.dailyReports) e.dailyReports.forEach(f => docs.push({ name: f.name, url: f.url, uploadedAt: e.date }));
+                    
+                    if (e.expenseFiles) {
+                        ['breakfast', 'lunch', 'dinner', 'petrol'].forEach(cat => {
+                            if (e.expenseFiles[cat]) {
+                                e.expenseFiles[cat].forEach(f => docs.push({ name: f.name, url: f.url, uploadedAt: e.date, category: cat }));
+                            }
+                        });
+                    }
+                    if (e.otherExpensesList) {
+                        e.otherExpensesList.forEach(oe => {
+                            if (oe.files) oe.files.forEach(f => docs.push({ name: f.name, url: f.url, uploadedAt: e.date }));
+                        });
+                    }
                 }
             });
             
@@ -544,4 +591,32 @@ const resumeMonth = async (req, res) => {
     }
 };
 
-module.exports = { createSchedule, updateSchedule, getSchedules, getSitesByClient, completeSchedule, rejectSchedule, updateInvoiceStatus, pauseMonth, resumeMonth };
+const endMonth = async (req, res) => {
+    try {
+        const { client, site } = req.params;
+        const yesterday = new Date();
+        yesterday.setDate(yesterday.getDate() - 1);
+        yesterday.setHours(0, 0, 0, 0);
+
+        // Find the latest active month contract
+        const latestSchedule = await ScheduleMaster.findOne({
+            client,
+            site,
+            scheduleType: 'MONTH'
+        }).sort({ scheduleDate: -1 });
+
+        if (latestSchedule && latestSchedule.monthGroupId) {
+            // End the contract by rolling back its endDate to yesterday, instantly terminating cron generation
+            await ScheduleMaster.updateMany(
+                { monthGroupId: latestSchedule.monthGroupId },
+                { $set: { endDate: yesterday, dayStatus: 'Completed' } }
+            );
+        }
+
+        res.json({ success: true, message: 'Month Contract has been successfully completed.' });
+    } catch (error) {
+        res.status(500).json({ success: false, message: error.message });
+    }
+};
+
+module.exports = { createSchedule, updateSchedule, getSchedules, getSitesByClient, completeSchedule, rejectSchedule, updateInvoiceStatus, pauseMonth, resumeMonth, endMonth };
