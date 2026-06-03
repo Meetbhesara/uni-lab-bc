@@ -80,6 +80,13 @@ const ScheduleMasterSchema = new mongoose.Schema({
         type: String,
         enum: ['Pending', 'Completed'],
         default: 'Pending'
+    },
+    draftingWorkFiles: {
+        collectedFiles: [{ name: String, url: String, uploadedAt: { type: Date, default: Date.now } }],
+        convertedFiles: [{ name: String, url: String, uploadedAt: { type: Date, default: Date.now } }],
+        liningDrawFiles: [{ name: String, url: String, uploadedAt: { type: Date, default: Date.now } }],
+        esurveyWorkFiles: [{ name: String, url: String, uploadedAt: { type: Date, default: Date.now } }],
+        finalCheckingFiles: [{ name: String, url: String, uploadedAt: { type: Date, default: Date.now } }]
     }
 }, { timestamps: true });
 

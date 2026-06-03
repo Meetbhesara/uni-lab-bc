@@ -161,10 +161,18 @@ exports.adminAddExpense = async (req, res) => {
 
             // Merge clientSites
             for (const newSite of parsedClientSites) {
-                const existingSite = existingExpense.clientSites.find(cs => 
-                    (newSite.scheduleId && String(cs.scheduleId) === String(newSite.scheduleId)) ||
-                    (!newSite.scheduleId && String(cs.siteId) === String(newSite.siteId) && String(cs.clientId) === String(newSite.clientId))
-                );
+                const existingSite = existingExpense.clientSites.find(cs => {
+                    // Strict scheduleId check
+                    if (newSite.scheduleId && cs.scheduleId) {
+                        return String(cs.scheduleId) === String(newSite.scheduleId);
+                    }
+                    // If one has a scheduleId and the other doesn't, they are different blocks.
+                    if (newSite.scheduleId || cs.scheduleId) {
+                        return false;
+                    }
+                    // Only merge by siteId/clientId if neither has a scheduleId
+                    return String(cs.siteId) === String(newSite.siteId) && String(cs.clientId) === String(newSite.clientId);
+                });
                 
                 // Update ScheduleMaster ledger if provided and a scheduleId is present
                 if (newSite.scheduleId && newSite.ledger) {

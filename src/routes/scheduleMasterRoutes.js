@@ -3,7 +3,20 @@ const router = express.Router();
 const multer = require('multer');
 const path = require('path');
 const fs = require('fs');
-const { createSchedule, updateSchedule, getSchedules, getSitesByClient, completeSchedule, rejectSchedule, updateInvoiceStatus, pauseMonth, resumeMonth, endMonth } = require('../controllers/scheduleMasterController');
+const {
+    getSchedules,
+    createSchedule,
+    updateSchedule,
+    completeSchedule,
+    rejectSchedule,
+    getSitesByClient,
+    updateInvoiceStatus,
+    pauseMonth,
+    resumeMonth,
+    endMonth,
+    uploadDraftingWorkFiles,
+    deleteDraftingWorkFile
+} = require('../controllers/scheduleMasterController');
 
 // --- Multer Storage for Completion Files ---
 const storage = multer.diskStorage({
@@ -30,6 +43,9 @@ const storage = multer.diskStorage({
             let sub = 'data'; 
             if (file.fieldname === 'photos') sub = 'photos';
             else if (file.fieldname === 'dailyReports') sub = 'Daily_report';
+            else if (['collectedFiles', 'convertedFiles', 'liningDrawFiles', 'esurveyWorkFiles', 'finalCheckingFiles'].includes(file.fieldname)) {
+                sub = 'drafting'; // save in drafting directory
+            }
 
             const subPath = path.join(targetDir, sub);
             if (!fs.existsSync(subPath)) fs.mkdirSync(subPath, { recursive: true });
@@ -40,8 +56,12 @@ const storage = multer.diskStorage({
         }
     },
     filename: (req, file, cb) => {
-        const uniqueSuffix = Date.now() + '-' + Math.round(Math.random() * 1e9);
-        cb(null, file.fieldname + '-' + uniqueSuffix + path.extname(file.originalname));
+        if (['collectedFiles', 'convertedFiles', 'liningDrawFiles', 'esurveyWorkFiles', 'finalCheckingFiles'].includes(file.fieldname)) {
+            cb(null, file.originalname); // Use original filename for drafting works
+        } else {
+            const uniqueSuffix = Date.now() + '-' + Math.round(Math.random() * 1e9);
+            cb(null, file.fieldname + '-' + uniqueSuffix + path.extname(file.originalname));
+        }
     }
 });
 
@@ -85,5 +105,17 @@ router.post('/resume-month', resumeMonth);
 
 // PUT /api/schedule-master/end-month/:client/:site (End month contract)
 router.put('/end-month/:client/:site', endMonth);
+
+// POST /api/schedule-master/drafting-work/:id (Upload drafting work files)
+router.post('/drafting-work/:id', upload.fields([
+    { name: 'collectedFiles', maxCount: 10 },
+    { name: 'convertedFiles', maxCount: 10 },
+    { name: 'liningDrawFiles', maxCount: 10 },
+    { name: 'esurveyWorkFiles', maxCount: 10 },
+    { name: 'finalCheckingFiles', maxCount: 10 }
+]), uploadDraftingWorkFiles);
+
+// DELETE /api/schedule-master/drafting-work/:id/:category/:fileId (Delete drafting work file)
+router.delete('/drafting-work/:id/:category/:fileId', deleteDraftingWorkFile);
 
 module.exports = router;

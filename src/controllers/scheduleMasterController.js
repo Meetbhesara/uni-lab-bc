@@ -20,10 +20,8 @@ const createSchedule = async (req, res) => {
         if (scheduleType === 'MONTH' && endDate) {
             const start = new Date(scheduleDate);
             const end = new Date(endDate);
-            // Find the highest monthGroupId for this client and site
+            // Find the highest monthGroupId globally across all schedules
             const lastGroup = await ScheduleMaster.findOne({
-                client,
-                site,
                 scheduleType: 'MONTH'
             }).sort({ monthGroupId: -1 });
 
@@ -73,7 +71,7 @@ const createSchedule = async (req, res) => {
         await schedule.save();
         const populated = await ScheduleMaster.findById(schedule._id)
             .populate('client', 'clientName clientId')
-            .populate('site', 'siteName siteAddress ledgerItems')
+            .populate('site', 'siteName siteId siteAddress ledgerItems')
             .populate('operative', 'name phone')
             .populate('helpers', 'name phone')
             .populate('vehicle', 'vehicleNumber vehicleName')
@@ -93,7 +91,7 @@ const updateSchedule = async (req, res) => {
         // Only update fields that are actually provided
         const updates = {};
         const unsets = {};
-        const allowedFields = ['client', 'site', 'scheduleDate', 'workForAppley', 'operative', 'helpers', 'notes', 'status', 'dayStatus', 'ledger', 'amount', 'vehicle', 'instruments', 'scheduleType'];
+        const allowedFields = ['client', 'site', 'scheduleDate', 'workForAppley', 'operative', 'helpers', 'notes', 'status', 'dayStatus', 'ledger', 'amount', 'vehicle', 'instruments', 'scheduleType', 'endDate'];
         allowedFields.forEach(field => {
             if (req.body[field] !== undefined) {
                 // If the field is an ObjectId field and is an empty string, set it to undefined/null
@@ -113,6 +111,16 @@ const updateSchedule = async (req, res) => {
             return res.status(400).json({ success: false, message: 'No fields provided for update' });
         }
 
+        if (updates.scheduleType === 'MONTH' && updates.endDate) {
+            const existingSchedule = await ScheduleMaster.findById(id);
+            if (existingSchedule && !existingSchedule.monthGroupId) {
+                const lastGroup = await ScheduleMaster.findOne({
+                    scheduleType: 'MONTH'
+                }).sort({ monthGroupId: -1 });
+                updates.monthGroupId = (lastGroup && lastGroup.monthGroupId) ? lastGroup.monthGroupId + 1 : 1;
+            }
+        }
+
         const updateOperation = { $set: updates };
         if (Object.keys(unsets).length > 0) {
             updateOperation.$unset = unsets;
@@ -124,7 +132,7 @@ const updateSchedule = async (req, res) => {
             { new: true, runValidators: false }
         )
             .populate('client', 'clientName clientId')
-            .populate('site', 'siteName siteAddress ledgerItems')
+            .populate('site', 'siteName siteId siteAddress ledgerItems')
             .populate('operative', 'name phone')
             .populate('helpers', 'name phone')
             .populate('vehicle', 'vehicleNumber vehicleName')
@@ -285,8 +293,12 @@ const getSchedules = async (req, res) => {
             }
         }
 
-        const { date, startDate, endDate, client, site } = req.query;
+        const { date, startDate, endDate, client, site, scheduleType } = req.query;
         const filter = {};
+        
+        if (scheduleType) {
+            filter.scheduleType = scheduleType;
+        }
 
         // Date-wise filtering
         if (date) {
@@ -310,6 +322,7 @@ const getSchedules = async (req, res) => {
         if (client) filter.client = client;
         if (site) filter.site = site;
         if (req.query.scheduleType) filter.scheduleType = req.query.scheduleType;
+        if (req.query.workForAppley) filter.workForAppley = new RegExp(req.query.workForAppley, 'i');
         if (req.query.invoiceStatus) filter.invoiceStatus = req.query.invoiceStatus;
         
         // Add employee filtering logic (if assigned as leader OR helper)
@@ -324,7 +337,7 @@ const getSchedules = async (req, res) => {
         const schedules = await ScheduleMaster.find(filter)
             
             .populate('client', 'clientName clientId')
-            .populate('site', 'siteName siteAddress ledgerItems')
+            .populate('site', 'siteName siteId siteAddress ledgerItems')
             .populate('operative', 'name phone')
             .populate('helpers', 'name phone')
             .populate('vehicle', 'vehicleNumber vehicleName')
@@ -613,10 +626,79 @@ const endMonth = async (req, res) => {
             );
         }
 
-        res.json({ success: true, message: 'Month Contract has been successfully completed.' });
+        res.json({ success: true, message: 'Contract completed successfully.' });
     } catch (error) {
         res.status(500).json({ success: false, message: error.message });
     }
 };
 
-module.exports = { createSchedule, updateSchedule, getSchedules, getSitesByClient, completeSchedule, rejectSchedule, updateInvoiceStatus, pauseMonth, resumeMonth, endMonth };
+const uploadDraftingWorkFiles = async (req, res) => {
+    try {
+        const { id } = req.params;
+        const schedule = await ScheduleMaster.findById(id);
+        if (!schedule) return res.status(404).json({ success: false, message: 'Schedule not found' });
+
+        if (!schedule.draftingWorkFiles) schedule.draftingWorkFiles = {};
+
+        const categories = ['collectedFiles', 'convertedFiles', 'liningDrawFiles', 'esurveyWorkFiles', 'finalCheckingFiles'];
+        const { clientShortId, siteSubfolder } = req.body;
+        const path = require('path');
+        
+        categories.forEach(cat => {
+            if (req.files && req.files[cat]) {
+                const docs = req.files[cat].map(f => {
+                    let fileUrl = `/uploads/${path.basename(f.path)}`;
+                    if (clientShortId && siteSubfolder) {
+                        fileUrl = `/uploads/client_master/${clientShortId}/site_master/${siteSubfolder}/drafting/${path.basename(f.path)}`;
+                    }
+                    return {
+                        name: f.originalname,
+                        url: fileUrl,
+                        uploadedAt: new Date()
+                    };
+                });
+                if (!schedule.draftingWorkFiles[cat]) schedule.draftingWorkFiles[cat] = [];
+                schedule.draftingWorkFiles[cat].push(...docs);
+            }
+        });
+
+        await schedule.save();
+
+        res.json({ success: true, message: 'Drafting files uploaded successfully', data: schedule.draftingWorkFiles });
+    } catch (error) {
+        console.error('Error uploading drafting files:', error);
+        res.status(500).json({ success: false, message: error.message });
+    }
+};
+
+const deleteDraftingWorkFile = async (req, res) => {
+    try {
+        const { id, category, fileId } = req.params;
+        const schedule = await ScheduleMaster.findById(id);
+        if (!schedule) return res.status(404).json({ success: false, message: 'Schedule not found' });
+
+        if (schedule.draftingWorkFiles && schedule.draftingWorkFiles[category]) {
+            schedule.draftingWorkFiles[category] = schedule.draftingWorkFiles[category].filter(f => f._id.toString() !== fileId);
+            await schedule.save();
+        }
+
+        res.json({ success: true, message: 'Drafting file deleted successfully', data: schedule.draftingWorkFiles });
+    } catch (error) {
+        res.status(500).json({ success: false, message: error.message });
+    }
+};
+
+module.exports = {
+    createSchedule,
+    updateSchedule,
+    getSchedules,
+    getSitesByClient,
+    completeSchedule,
+    rejectSchedule,
+    updateInvoiceStatus,
+    pauseMonth,
+    resumeMonth,
+    endMonth,
+    uploadDraftingWorkFiles,
+    deleteDraftingWorkFile
+};

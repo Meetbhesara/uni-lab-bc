@@ -489,7 +489,7 @@ const getAllGlobalDocuments = async (req, res) => {
         const EmployeeExpense = require('../models/EmployeeExpense');
         const ScheduleMaster = require('../models/ScheduleMaster');
 
-        const { client, site, scheduleDate } = req.query;
+        const { client, site, scheduleDate, scheduleId } = req.query;
 
         let siteQuery = {};
         if (client) siteQuery.client = client;
@@ -583,6 +583,10 @@ const getAllGlobalDocuments = async (req, res) => {
                         
                         if (eDate < sDate || eDate >= nDate) return;
                         if (sIdStr && !validSiteIdsFromSchedule.has(sIdStr)) return;
+                    }
+                    
+                    if (scheduleId && cs.scheduleId && cs.scheduleId.toString() !== scheduleId) {
+                        return; // strictly skip files belonging to other schedules on the same day/site
                     }
 
                     const addFiles = (fileArray, type) => {
