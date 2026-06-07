@@ -641,7 +641,7 @@ const uploadDraftingWorkFiles = async (req, res) => {
         if (!schedule.draftingWorkFiles) schedule.draftingWorkFiles = {};
 
         const categories = ['collectedFiles', 'convertedFiles', 'liningDrawFiles', 'esurveyWorkFiles', 'finalCheckingFiles'];
-        const { clientShortId, siteSubfolder } = req.body;
+        const { clientShortId, siteSubfolder, originalFileId } = req.body;
         const path = require('path');
         
         categories.forEach(cat => {
@@ -651,14 +651,33 @@ const uploadDraftingWorkFiles = async (req, res) => {
                     if (clientShortId && siteSubfolder) {
                         fileUrl = `/uploads/client_master/${clientShortId}/site_master/${siteSubfolder}/drafting/${path.basename(f.path)}`;
                     }
-                    return {
+                    const docObj = {
                         name: f.originalname,
                         url: fileUrl,
                         uploadedAt: new Date()
                     };
+                    if (originalFileId) {
+                        docObj.originalFileId = originalFileId;
+                    }
+                    return docObj;
                 });
+                
                 if (!schedule.draftingWorkFiles[cat]) schedule.draftingWorkFiles[cat] = [];
-                schedule.draftingWorkFiles[cat].push(...docs);
+                
+                if (originalFileId && cat !== 'esurveyWorkFiles') {
+                    const existingIndex = schedule.draftingWorkFiles[cat].findIndex(d => d.originalFileId === originalFileId);
+                    if (existingIndex >= 0) {
+                        // Override the first file mapping to this originalFileId
+                        schedule.draftingWorkFiles[cat][existingIndex] = docs[0];
+                        if (docs.length > 1) {
+                            schedule.draftingWorkFiles[cat].push(...docs.slice(1));
+                        }
+                    } else {
+                        schedule.draftingWorkFiles[cat].push(...docs);
+                    }
+                } else {
+                    schedule.draftingWorkFiles[cat].push(...docs);
+                }
             }
         });
 
@@ -667,6 +686,101 @@ const uploadDraftingWorkFiles = async (req, res) => {
         res.json({ success: true, message: 'Drafting files uploaded successfully', data: schedule.draftingWorkFiles });
     } catch (error) {
         console.error('Error uploading drafting files:', error);
+        res.status(500).json({ success: false, message: error.message });
+    }
+};
+
+const updateDraftingWorkFileStatus = async (req, res) => {
+    try {
+        const { id, category, fileId } = req.params;
+        const { status } = req.body;
+        const schedule = await ScheduleMaster.findById(id);
+        if (!schedule) return res.status(404).json({ success: false, message: 'Schedule not found' });
+
+        if (schedule.draftingWorkFiles && schedule.draftingWorkFiles[category]) {
+            const fileObj = schedule.draftingWorkFiles[category].id(fileId);
+            if (fileObj) {
+                fileObj.status = status;
+
+                if (category === 'esurveyWorkFiles' && status === 'Approved') {
+                    if (!schedule.draftingWorkFiles.finalCheckingFiles) schedule.draftingWorkFiles.finalCheckingFiles = [];
+                    const exists = schedule.draftingWorkFiles.finalCheckingFiles.some(f => f.originalFileId === fileObj._id.toString());
+                    if (!exists) {
+                        schedule.draftingWorkFiles.finalCheckingFiles.push({
+                            name: fileObj.name,
+                            url: fileObj.url,
+                            uploadedAt: new Date(),
+                            originalFileId: fileObj._id.toString(),
+                            status: 'Pending'
+                        });
+                    }
+                } else if (category === 'esurveyWorkFiles' && (status === 'Rejected' || status === 'Pending')) {
+                    if (schedule.draftingWorkFiles.finalCheckingFiles) {
+                        schedule.draftingWorkFiles.finalCheckingFiles = schedule.draftingWorkFiles.finalCheckingFiles.filter(f => f.originalFileId !== fileObj._id.toString());
+                    }
+                }
+
+                if (category === 'finalCheckingFiles' && status === 'Approved') {
+                    if (!schedule.draftingWorkFiles.mailFiles) schedule.draftingWorkFiles.mailFiles = [];
+                    const exists = schedule.draftingWorkFiles.mailFiles.some(f => f.originalFileId === fileObj._id.toString());
+                    
+                    if (!exists) {
+                        const path = require('path');
+                        const fs = require('fs');
+                        try {
+                            const sourceUrl = fileObj.url;
+                            const sourceRelativePath = sourceUrl.replace(/^\/uploads\//, '');
+                            
+                            const useNas = process.env.USE_NAS === 'true';
+                            let baseDir;
+                            if (useNas) {
+                                let nasBase = process.env.NAS_BASE_PATH || '/app/storage';
+                                if (!nasBase.startsWith('/')) nasBase = '/' + nasBase;
+                                baseDir = nasBase;
+                            } else {
+                                const localBase = process.env.LOCAL_BASE_PATH || './uploads';
+                                baseDir = path.isAbsolute(localBase) ? localBase : path.join(__dirname, '..', '..', localBase.replace('./', ''));
+                            }
+                            
+                            const sourceFullPath = path.join(baseDir, sourceRelativePath);
+                            const mailFolder = path.join(path.dirname(sourceFullPath), 'mail');
+                            if (!fs.existsSync(mailFolder)) {
+                                fs.mkdirSync(mailFolder, { recursive: true });
+                            }
+                            
+                            const mailFileName = path.basename(sourceFullPath);
+                            const mailFullPath = path.join(mailFolder, mailFileName);
+                            
+                            if (fs.existsSync(sourceFullPath)) {
+                                fs.copyFileSync(sourceFullPath, mailFullPath);
+                                
+                                const mailUrlPath = sourceUrl.substring(0, sourceUrl.lastIndexOf('/')) + '/mail/' + mailFileName;
+                                
+                                schedule.draftingWorkFiles.mailFiles.push({
+                                    name: fileObj.name,
+                                    url: mailUrlPath,
+                                    uploadedAt: new Date(),
+                                    originalFileId: fileObj._id.toString(),
+                                    status: 'Pending'
+                                });
+                            }
+                        } catch (err) {
+                            console.error('Error copying file to mail folder:', err);
+                        }
+                    }
+                    schedule.dayStatus = 'Completed';
+                } else if (category === 'finalCheckingFiles' && (status === 'Rejected' || status === 'Pending')) {
+                    if (schedule.draftingWorkFiles.mailFiles) {
+                        schedule.draftingWorkFiles.mailFiles = schedule.draftingWorkFiles.mailFiles.filter(f => f.originalFileId !== fileObj._id.toString());
+                    }
+                }
+
+                await schedule.save();
+                return res.json({ success: true, message: 'Status updated successfully', data: schedule.draftingWorkFiles });
+            }
+        }
+        res.status(404).json({ success: false, message: 'File not found' });
+    } catch (error) {
         res.status(500).json({ success: false, message: error.message });
     }
 };
@@ -700,5 +814,6 @@ module.exports = {
     resumeMonth,
     endMonth,
     uploadDraftingWorkFiles,
+    updateDraftingWorkFileStatus,
     deleteDraftingWorkFile
 };

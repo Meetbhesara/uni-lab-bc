@@ -82,11 +82,12 @@ const ScheduleMasterSchema = new mongoose.Schema({
         default: 'Pending'
     },
     draftingWorkFiles: {
-        collectedFiles: [{ name: String, url: String, uploadedAt: { type: Date, default: Date.now } }],
-        convertedFiles: [{ name: String, url: String, uploadedAt: { type: Date, default: Date.now } }],
-        liningDrawFiles: [{ name: String, url: String, uploadedAt: { type: Date, default: Date.now } }],
-        esurveyWorkFiles: [{ name: String, url: String, uploadedAt: { type: Date, default: Date.now } }],
-        finalCheckingFiles: [{ name: String, url: String, uploadedAt: { type: Date, default: Date.now } }]
+        collectedFiles: [{ name: String, url: String, uploadedAt: { type: Date, default: Date.now }, originalFileId: String, status: { type: String, enum: ['Pending', 'Approved', 'Rejected'], default: 'Pending' } }],
+        convertedFiles: [{ name: String, url: String, uploadedAt: { type: Date, default: Date.now }, originalFileId: String, status: { type: String, enum: ['Pending', 'Approved', 'Rejected'], default: 'Pending' } }],
+        liningDrawFiles: [{ name: String, url: String, uploadedAt: { type: Date, default: Date.now }, originalFileId: String, status: { type: String, enum: ['Pending', 'Approved', 'Rejected'], default: 'Pending' } }],
+        esurveyWorkFiles: [{ name: String, url: String, uploadedAt: { type: Date, default: Date.now }, originalFileId: String, status: { type: String, enum: ['Pending', 'Approved', 'Rejected'], default: 'Pending' } }],
+        finalCheckingFiles: [{ name: String, url: String, uploadedAt: { type: Date, default: Date.now }, originalFileId: String, status: { type: String, enum: ['Pending', 'Approved', 'Rejected'], default: 'Pending' } }],
+        mailFiles: [{ name: String, url: String, uploadedAt: { type: Date, default: Date.now }, originalFileId: String, status: { type: String, enum: ['Pending', 'Approved', 'Rejected'], default: 'Pending' } }]
     }
 }, { timestamps: true });
 

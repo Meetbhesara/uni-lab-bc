@@ -67,13 +67,13 @@ const storage = multer.diskStorage({
 
 const upload = multer({ 
     storage,
-    limits: { fileSize: 20 * 1024 * 1024 }, // 20MB limit
+    limits: { fileSize: 150 * 1024 * 1024 }, // 150MB limit
     fileFilter: (req, file, cb) => {
-        const allowedTypes = /jpeg|jpg|png|pdf|doc|docx|xls|xlsx|csv/;
+        const allowedTypes = /jpeg|jpg|png|pdf|doc|docx|xls|xlsx|csv|dwg|dxf|zip|rar/;
         const extname = allowedTypes.test(path.extname(file.originalname).toLowerCase());
-        const mimetype = allowedTypes.test(file.mimetype) || file.mimetype.includes('excel') || file.mimetype.includes('spreadsheetml');
+        const mimetype = allowedTypes.test(file.mimetype) || file.mimetype.includes('excel') || file.mimetype.includes('spreadsheetml') || file.mimetype.includes('dwg') || file.mimetype.includes('dxf') || file.mimetype.includes('zip');
         if (extname || mimetype) return cb(null, true);
-        cb(new Error('Invalid file type. Allowed: Images, PDFs, Docs, Excel.'));
+        cb(new Error('Invalid file type. Allowed: Images, PDFs, Docs, Excel, DWG, DXF, ZIP, RAR.'));
     }
 });
 // -------------------------------------------
@@ -114,6 +114,9 @@ router.post('/drafting-work/:id', upload.fields([
     { name: 'esurveyWorkFiles', maxCount: 10 },
     { name: 'finalCheckingFiles', maxCount: 10 }
 ]), uploadDraftingWorkFiles);
+
+// PUT /api/schedule-master/drafting-work-status/:id/:category/:fileId (Update drafting work file status)
+router.put('/drafting-work-status/:id/:category/:fileId', require('../controllers/scheduleMasterController').updateDraftingWorkFileStatus);
 
 // DELETE /api/schedule-master/drafting-work/:id/:category/:fileId (Delete drafting work file)
 router.delete('/drafting-work/:id/:category/:fileId', deleteDraftingWorkFile);
