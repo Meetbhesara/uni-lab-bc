@@ -62,8 +62,12 @@ const ScheduleMasterSchema = new mongoose.Schema({
     }],
     scheduleType: {
         type: String,
-        enum: ['VISIT', 'MONTH', 'TOPOGRAPHY SURVEY', ''],
+        enum: ['VISIT', 'MONTH', 'TOPOGRAPHY SURVEY', 'POINT MARKING', ''],
         default: 'VISIT'
+    },
+    quantity: {
+        type: Number,
+        default: 0
     },
     monthGroupId: {
         type: Number
@@ -73,8 +77,15 @@ const ScheduleMasterSchema = new mongoose.Schema({
     },
     status: {
         type: String,
-        enum: ['Active', 'Deactive'],
-        default: 'Active'
+        enum: ['Active', 'Deactive', 'active', 'deactive'],
+        default: 'Active',
+        set: function(val) {
+            if (!val) return val;
+            const lower = val.toLowerCase();
+            if (lower === 'active') return 'Active';
+            if (lower === 'deactive') return 'Deactive';
+            return val;
+        }
     },
     invoiceStatus: {
         type: String,

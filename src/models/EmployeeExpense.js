@@ -16,6 +16,7 @@ const EmployeeExpenseSchema = new mongoose.Schema({
         clientId: { type: mongoose.Schema.Types.ObjectId, ref: 'ClientMaster' },
         siteId: { type: mongoose.Schema.Types.ObjectId, ref: 'SiteMaster' },
         ledger: { type: String, trim: true },
+        quantity: { type: Number, default: 0 },
         files: {
             photos: [{ name: String, url: String, path: String, status: { type: String, default: 'Received' }, uploadedAt: { type: Date, default: Date.now }, isDraft: { type: Boolean, default: false }, linkedDocumentId: { type: String }, approvalDate: { type: Date }, inMail: { type: Boolean, default: false }, mailFolderName: { type: String } }],
             dailyReports: [{ name: String, url: String, path: String, status: { type: String, default: 'Received' }, uploadedAt: { type: Date, default: Date.now }, isDraft: { type: Boolean, default: false }, linkedDocumentId: { type: String }, approvalDate: { type: Date }, inMail: { type: Boolean, default: false }, mailFolderName: { type: String } }],

@@ -52,8 +52,15 @@ const SiteMasterSchema = new mongoose.Schema({
     }],
     status: {
         type: String,
-        enum: ['Active', 'Deactive'],
-        default: 'Active'
+        enum: ['Active', 'Deactive', 'active', 'deactive'],
+        default: 'Active',
+        set: function(val) {
+            if (!val) return val;
+            const lower = val.toLowerCase();
+            if (lower === 'active') return 'Active';
+            if (lower === 'deactive') return 'Deactive';
+            return val;
+        }
     },
     createdAt: {
         type: Date,

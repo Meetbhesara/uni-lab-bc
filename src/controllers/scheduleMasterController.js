@@ -19,6 +19,9 @@ const createSchedule = async (req, res) => {
 
         if (scheduleType === 'MONTH' && endDate) {
             const start = new Date(scheduleDate);
+            if (req.body.skipToday) {
+                start.setDate(start.getDate() + 1);
+            }
             const end = new Date(endDate);
             // Find the highest monthGroupId globally across all schedules
             const lastGroup = await ScheduleMaster.findOne({
@@ -194,6 +197,10 @@ const updateSchedule = async (req, res) => {
             }
         }
 
+        if (req.body.skipToday === true) {
+            await ScheduleMaster.findByIdAndUpdate(schedule._id, { $set: { dayStatus: 'Skipped' } });
+        }
+
         res.json({ success: true, message: 'Schedule updated successfully', data: schedule });
     } catch (error) {
         console.error('Error in updateSchedule:', error);
@@ -280,7 +287,7 @@ const getSchedules = async (req, res) => {
                             notes: doc.notes,
                             vehicle: doc.vehicle,
                             instruments: doc.instruments,
-                            status: doc.status,
+                            status: doc.status ? (doc.status.toLowerCase() === 'active' ? 'Active' : (doc.status.toLowerCase() === 'deactive' ? 'Deactive' : doc.status)) : 'Active',
                             dayStatus: 'Scheduled',
                             scheduleType: 'MONTH',
                             monthGroupId: doc.monthGroupId
@@ -302,18 +309,23 @@ const getSchedules = async (req, res) => {
 
         // Date-wise filtering
         if (date) {
-            const d = new Date(date);
-            const todayStr = new Date().toISOString().split('T')[0];
-            const queryDateStr = d.toISOString().split('T')[0];
+            const [year, month, day] = date.split('T')[0].split('-');
+            const dStart = new Date();
+            dStart.setFullYear(parseInt(year), parseInt(month) - 1, parseInt(day));
+            dStart.setHours(0, 0, 0, 0);
+            
+            const nextDay = new Date(dStart);
+            nextDay.setDate(dStart.getDate() + 1);
 
-            if (queryDateStr === todayStr) {
+            const today = new Date();
+            today.setHours(0, 0, 0, 0);
+
+            if (dStart.getTime() === today.getTime()) {
                 // If query is today, fetch today AND future data!
-                filter.scheduleDate = { $gte: d };
+                filter.scheduleDate = { $gte: dStart };
             } else {
                 // If past date (or specific future date selected via calendar), fetch ONLY that specific day
-                const nextDay = new Date(d);
-                nextDay.setDate(d.getDate() + 1);
-                filter.scheduleDate = { $gte: d, $lt: nextDay };
+                filter.scheduleDate = { $gte: dStart, $lt: nextDay };
             }
         } else if (startDate && endDate) {
             filter.scheduleDate = { $gte: new Date(startDate), $lte: new Date(endDate) };
@@ -334,8 +346,10 @@ const getSchedules = async (req, res) => {
             ];
         }
 
+        // Hide any skipped schedules from the active dashboard views
+        filter.dayStatus = { $ne: 'Skipped' };
+
         const schedules = await ScheduleMaster.find(filter)
-            
             .populate('client', 'clientName clientId')
             .populate('site', 'siteName siteId siteAddress ledgerItems')
             .populate('operative', 'name phone')
@@ -517,19 +531,20 @@ const updateInvoiceStatus = async (req, res) => {
 
 const pauseMonth = async (req, res) => {
     try {
-        const { client, site } = req.params;
+        const { client, site, monthGroupId } = req.params;
         const today = new Date();
         today.setHours(0, 0, 0, 0);
 
         const result = await ScheduleMaster.updateMany({
             client,
             site,
+            monthGroupId,
             scheduleType: 'MONTH',
             dayStatus: 'Scheduled',
             scheduleDate: { $gte: today }
         }, { $set: { dayStatus: 'Paused' } });
 
-        res.json({ success: true, message: `Paused month schedule. Paused ${result.modifiedCount} upcoming schedules.` });
+        res.json({ success: true, message: `Paused future month schedules for this site.` });
     } catch (error) {
         res.status(500).json({ success: false, message: error.message });
     }
@@ -537,18 +552,18 @@ const pauseMonth = async (req, res) => {
 
 const resumeMonth = async (req, res) => {
     try {
-        const { client, site, endDate, workForAppley, operative, ledger, amount } = req.body;
-        
-        if (!endDate) return res.status(400).json({ success: false, message: 'End date is required to resume' });
-
-        const end = new Date(endDate);
+        const { client, site, endDate, workForAppley, operative, ledger, amount, monthGroupId } = req.body;
         const today = new Date();
         today.setHours(0, 0, 0, 0);
 
-        // 1. Un-pause existing schedules up to endDate
+        const end = new Date(endDate);
+        end.setHours(0, 0, 0, 0);
+
+        // 1. Resume any previously paused schedules up to the new endDate
         await ScheduleMaster.updateMany({
             client,
             site,
+            monthGroupId,
             scheduleType: 'MONTH',
             dayStatus: 'Paused',
             scheduleDate: { $lte: end, $gte: today }
@@ -558,6 +573,7 @@ const resumeMonth = async (req, res) => {
         await ScheduleMaster.deleteMany({
             client,
             site,
+            monthGroupId,
             scheduleType: 'MONTH',
             dayStatus: 'Paused',
             scheduleDate: { $gt: end }
@@ -567,6 +583,7 @@ const resumeMonth = async (req, res) => {
         const lastSchedule = await ScheduleMaster.findOne({
             client,
             site,
+            monthGroupId,
             scheduleType: 'MONTH'
         }).sort({ scheduleDate: -1 });
 
@@ -606,25 +623,16 @@ const resumeMonth = async (req, res) => {
 
 const endMonth = async (req, res) => {
     try {
-        const { client, site } = req.params;
+        const { client, site, monthGroupId } = req.params;
         const yesterday = new Date();
         yesterday.setDate(yesterday.getDate() - 1);
         yesterday.setHours(0, 0, 0, 0);
 
-        // Find the latest active month contract
-        const latestSchedule = await ScheduleMaster.findOne({
-            client,
-            site,
-            scheduleType: 'MONTH'
-        }).sort({ scheduleDate: -1 });
-
-        if (latestSchedule && latestSchedule.monthGroupId) {
-            // End the contract by rolling back its endDate to yesterday, instantly terminating cron generation
-            await ScheduleMaster.updateMany(
-                { monthGroupId: latestSchedule.monthGroupId },
-                { $set: { endDate: yesterday, dayStatus: 'Completed' } }
-            );
-        }
+        // End the specific contract by rolling back its endDate to yesterday, instantly terminating cron generation
+        await ScheduleMaster.updateMany(
+            { client, site, monthGroupId },
+            { $set: { endDate: yesterday, dayStatus: 'Completed' } }
+        );
 
         res.json({ success: true, message: 'Contract completed successfully.' });
     } catch (error) {
@@ -802,6 +810,22 @@ const deleteDraftingWorkFile = async (req, res) => {
     }
 };
 
+// DELETE - Delete a schedule entirely
+const deleteSchedule = async (req, res) => {
+    try {
+        const { id } = req.params;
+        const schedule = await ScheduleMaster.findByIdAndDelete(id);
+        if (!schedule) {
+            return res.status(404).json({ success: false, message: 'Schedule not found' });
+        }
+        res.json({ success: true, message: 'Schedule deleted successfully' });
+    } catch (error) {
+        console.error('Error in deleteSchedule:', error);
+        res.status(500).json({ success: false, message: error.message });
+    }
+};
+
+
 module.exports = {
     createSchedule,
     updateSchedule,
@@ -815,5 +839,6 @@ module.exports = {
     endMonth,
     uploadDraftingWorkFiles,
     updateDraftingWorkFileStatus,
-    deleteDraftingWorkFile
+    deleteDraftingWorkFile,
+    deleteSchedule
 };

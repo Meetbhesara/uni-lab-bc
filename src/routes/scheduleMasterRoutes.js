@@ -15,7 +15,8 @@ const {
     resumeMonth,
     endMonth,
     uploadDraftingWorkFiles,
-    deleteDraftingWorkFile
+    deleteDraftingWorkFile,
+    deleteSchedule
 } = require('../controllers/scheduleMasterController');
 
 // --- Multer Storage for Completion Files ---
@@ -97,14 +98,14 @@ router.put('/reject/:id', rejectSchedule);
 // PATCH /api/schedule-master/invoice-status/:id (Update invoice bill status)
 router.patch('/invoice-status/:id', updateInvoiceStatus);
 
-// DELETE /api/schedule-master/pause-month/:client/:site (Pause month schedule)
-router.delete('/pause-month/:client/:site', pauseMonth);
+// DELETE /api/schedule-master/pause-month/:client/:site/:monthGroupId (Pause month schedule)
+router.delete('/pause-month/:client/:site/:monthGroupId', pauseMonth);
 
 // POST /api/schedule-master/resume-month (Resume month schedule)
 router.post('/resume-month', resumeMonth);
 
-// PUT /api/schedule-master/end-month/:client/:site (End month contract)
-router.put('/end-month/:client/:site', endMonth);
+// PUT /api/schedule-master/end-month/:client/:site/:monthGroupId (End month contract)
+router.put('/end-month/:client/:site/:monthGroupId', endMonth);
 
 // POST /api/schedule-master/drafting-work/:id (Upload drafting work files)
 router.post('/drafting-work/:id', upload.fields([
@@ -120,5 +121,8 @@ router.put('/drafting-work-status/:id/:category/:fileId', require('../controller
 
 // DELETE /api/schedule-master/drafting-work/:id/:category/:fileId (Delete drafting work file)
 router.delete('/drafting-work/:id/:category/:fileId', deleteDraftingWorkFile);
+
+// DELETE /api/schedule-master/:id (Delete schedule entirely)
+router.delete('/:id', deleteSchedule);
 
 module.exports = router;

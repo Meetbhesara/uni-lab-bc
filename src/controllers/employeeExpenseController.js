@@ -174,17 +174,23 @@ exports.adminAddExpense = async (req, res) => {
                     return String(cs.siteId) === String(newSite.siteId) && String(cs.clientId) === String(newSite.clientId);
                 });
                 
-                // Update ScheduleMaster ledger if provided and a scheduleId is present
-                if (newSite.scheduleId && newSite.ledger) {
-                    await mongoose.model('ScheduleMaster').findByIdAndUpdate(
-                        newSite.scheduleId,
-                        { ledger: newSite.ledger },
-                        { session }
-                    );
+                // Update ScheduleMaster ledger and quantity if provided and a scheduleId is present
+                if (newSite.scheduleId) {
+                    const updateObj = {};
+                    if (newSite.ledger) updateObj.ledger = newSite.ledger;
+                    if (newSite.quantity !== undefined) updateObj.quantity = newSite.quantity;
+                    if (Object.keys(updateObj).length > 0) {
+                        await mongoose.model('ScheduleMaster').findByIdAndUpdate(
+                            newSite.scheduleId,
+                            updateObj,
+                            { session }
+                        );
+                    }
                 }
                 if (existingSite) {
-                    // Update ledger if it changed
+                    // Update ledger and quantity if they changed
                     if (newSite.ledger) existingSite.ledger = newSite.ledger;
+                    if (newSite.quantity !== undefined) existingSite.quantity = newSite.quantity;
                     
                     if (newSite.files) {
                         ['photos', 'dailyReports', 'data', 'drawing'].forEach(cat => {
@@ -291,14 +297,19 @@ exports.adminAddExpense = async (req, res) => {
             });
             savedExpense = await newExpense.save({ session });
             
-            // Update ScheduleMaster ledger if provided and a scheduleId is present
+            // Update ScheduleMaster ledger and quantity if provided and a scheduleId is present
             for (const newSite of parsedClientSites) {
-                if (newSite.scheduleId && newSite.ledger) {
-                    await mongoose.model('ScheduleMaster').findByIdAndUpdate(
-                        newSite.scheduleId,
-                        { ledger: newSite.ledger },
-                        { session }
-                    );
+                if (newSite.scheduleId) {
+                    const updateObj = {};
+                    if (newSite.ledger) updateObj.ledger = newSite.ledger;
+                    if (newSite.quantity !== undefined) updateObj.quantity = newSite.quantity;
+                    if (Object.keys(updateObj).length > 0) {
+                        await mongoose.model('ScheduleMaster').findByIdAndUpdate(
+                            newSite.scheduleId,
+                            updateObj,
+                            { session }
+                        );
+                    }
                 }
             }
         }
