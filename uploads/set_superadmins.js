@@ -1,7 +1,6 @@
 const path = require('path');
 require('dotenv').config({ path: path.join(__dirname, '../.env') });
 const mongoose = require('mongoose');
-const User = require('../src/models/User');
 
 const setSuperAdmins = async () => {
     try {
@@ -13,21 +12,36 @@ const setSuperAdmins = async () => {
         console.log('MongoDB connected successfully.');
 
         const targetEmails = ['iatulkanak@gamil.com', 'meetmanojbhai4@gmail.com'];
-        console.log('Target emails for Super Admin upgrade:', targetEmails);
+        console.log('Target emails (case-insensitive search):', targetEmails);
 
-        const result = await User.updateMany(
-            { email: { $in: targetEmails } },
-            { $set: { isSuperAdmin: true, isAdmin: true } }
-        );
+        const dbCollection = mongoose.connection.db.collection('users');
 
-        console.log(`Update result: Modified ${result.modifiedCount} document(s).`);
+        for (const email of targetEmails) {
+            const regex = new RegExp(`^${email.trim()}$`, 'i');
+            const foundUser = await dbCollection.findOne({ email: { $regex: regex } });
+            
+            if (foundUser) {
+                console.log(`Found user: ${foundUser.email} (ID: ${foundUser._id})`);
+                const updateRes = await dbCollection.updateOne(
+                    { _id: foundUser._id },
+                    { $set: { isSuperAdmin: true, isAdmin: true } }
+                );
+                console.log(`- Promotion result: matchedCount=${updateRes.matchedCount}, modifiedCount=${updateRes.modifiedCount}`);
+            } else {
+                console.log(`User with email "${email}" NOT found in the database.`);
+            }
+        }
 
-        // Display updated users to confirm success
-        const updatedUsers = await User.find({ email: { $in: targetEmails } });
-        console.log('Current status of target users:');
-        updatedUsers.forEach(user => {
-            console.log(`- Email: ${user.email} | isAdmin: ${user.isAdmin} | isSuperAdmin: ${user.isSuperAdmin}`);
-        });
+        console.log('\nFinal verification:');
+        for (const email of targetEmails) {
+            const regex = new RegExp(`^${email.trim()}$`, 'i');
+            const updated = await dbCollection.findOne({ email: { $regex: regex } });
+            if (updated) {
+                console.log(`- ${updated.email}: isAdmin=${updated.isAdmin}, isSuperAdmin=${updated.isSuperAdmin}`);
+            } else {
+                console.log(`- ${email}: NOT FOUND`);
+            }
+        }
 
         process.exit(0);
     } catch (err) {
