@@ -107,14 +107,7 @@ exports.adminAddExpense = async (req, res) => {
             });
         }
 
-        // 3. Update Current Employee Balance
-        const employee = await EmployeeMaster.findByIdAndUpdate(
-            employeeId,
-            { $inc: { totalAmount: -netImpact } },
-            { new: true, session }
-        );
-
-        // 4. Save Expense Record (Merge into existing record if employee and date match)
+        // 3. Find if record already exists for this employee and date
         const targetDate = new Date(date || new Date());
         const startOfDay = new Date(targetDate);
         startOfDay.setHours(0,0,0,0);
@@ -126,19 +119,29 @@ exports.adminAddExpense = async (req, res) => {
             date: { $gte: startOfDay, $lte: endOfDay }
         }).session(session);
 
+        let employee;
         let savedExpense;
 
         if (existingExpense) {
-            // MERGE INTO EXISTING RECORD
+            // MERGE / OVERWRITE INTO EXISTING RECORD
+            const oldTotalExpense = existingExpense.totalExpense || 0;
+            const oldTotalGiven = existingExpense.creditDebit?.givenTo?.reduce((acc, curr) => acc + (Number(curr.amount) || 0), 0) || 0;
+            const oldTotalReceived = existingExpense.creditDebit?.receivedFrom?.reduce((acc, curr) => acc + (Number(curr.amount) || 0), 0) || 0;
+            const oldNetImpact = oldTotalExpense + oldTotalGiven - oldTotalReceived;
+
+            const difference = netImpact - oldNetImpact;
+
+            // Update Current Employee Balance with the difference
+            employee = await EmployeeMaster.findByIdAndUpdate(
+                employeeId,
+                { $inc: { totalAmount: -difference } },
+                { new: true, session }
+            );
+
+            // Update details
             existingExpense.attendance = attendance || existingExpense.attendance;
-            if (attendanceRemark) {
-                existingExpense.attendanceRemark = existingExpense.attendanceRemark 
-                    ? `${existingExpense.attendanceRemark}; ${attendanceRemark}` 
-                    : attendanceRemark;
-            }
-            if (notes) {
-                existingExpense.notes = existingExpense.notes ? `${existingExpense.notes}\n${notes}` : notes;
-            }
+            existingExpense.attendanceRemark = attendanceRemark || '';
+            existingExpense.notes = notes || '';
             
             // Process deleted existing files
             if (parsedDeletedExistingFiles && parsedDeletedExistingFiles.length > 0) {
@@ -146,7 +149,7 @@ exports.adminAddExpense = async (req, res) => {
                     if (cs.files) {
                         ['photos', 'dailyReports', 'data', 'drawing'].forEach(cat => {
                             if (cs.files[cat] && cs.files[cat].length > 0) {
-                                cs.files[cat] = cs.files[cat].filter(f => !parsedDeletedExistingFiles.includes(f.url));
+                                cs.files[cat] = cs.files[cat].filter(f => !parsedDeletedExistingFiles.includes(f.url || f));
                             }
                         });
                     }
@@ -154,27 +157,33 @@ exports.adminAddExpense = async (req, res) => {
                 
                 ['photos', 'dataFiles', 'dailyReports'].forEach(cat => {
                     if (existingExpense[cat] && existingExpense[cat].length > 0) {
-                        existingExpense[cat] = existingExpense[cat].filter(f => !parsedDeletedExistingFiles.includes(f.url));
+                        existingExpense[cat] = existingExpense[cat].filter(f => !parsedDeletedExistingFiles.includes(f.url || f));
                     }
                 });
+
+                if (existingExpense.expenseFiles) {
+                    ['breakfast', 'lunch', 'dinner', 'petrol'].forEach(key => {
+                        if (existingExpense.expenseFiles[key]) {
+                            existingExpense.expenseFiles[key] = existingExpense.expenseFiles[key].filter(
+                                f => !parsedDeletedExistingFiles.includes(f.url || f)
+                            );
+                        }
+                    });
+                }
             }
 
             // Merge clientSites
             for (const newSite of parsedClientSites) {
                 const existingSite = existingExpense.clientSites.find(cs => {
-                    // Strict scheduleId check
                     if (newSite.scheduleId && cs.scheduleId) {
                         return String(cs.scheduleId) === String(newSite.scheduleId);
                     }
-                    // If one has a scheduleId and the other doesn't, they are different blocks.
                     if (newSite.scheduleId || cs.scheduleId) {
                         return false;
                     }
-                    // Only merge by siteId/clientId if neither has a scheduleId
                     return String(cs.siteId) === String(newSite.siteId) && String(cs.clientId) === String(newSite.clientId);
                 });
                 
-                // Update ScheduleMaster ledger and quantity if provided and a scheduleId is present
                 if (newSite.scheduleId) {
                     const updateObj = {};
                     if (newSite.ledger) updateObj.ledger = newSite.ledger;
@@ -188,7 +197,6 @@ exports.adminAddExpense = async (req, res) => {
                     }
                 }
                 if (existingSite) {
-                    // Update ledger and quantity if they changed
                     if (newSite.ledger) existingSite.ledger = newSite.ledger;
                     if (newSite.quantity !== undefined) existingSite.quantity = newSite.quantity;
                     
@@ -206,18 +214,13 @@ exports.adminAddExpense = async (req, res) => {
                 }
             }
 
-            // Merge expenses
-            if (!existingExpense.expenses) {
-                existingExpense.expenses = { breakfast: 0, lunch: 0, dinner: 0, petrol: 0 };
-            }
-            ['breakfast', 'lunch', 'dinner', 'petrol'].forEach(key => {
-                existingExpense.expenses[key] = (Number(existingExpense.expenses[key]) || 0) + (Number(parsedExpenses[key]) || 0);
-            });
+            // Overwrite expenses (Breakfast, Lunch, Dinner, Petrol)
+            existingExpense.expenses = parsedExpenses;
             if (fuelType) {
                 existingExpense.expenses.fuelType = fuelType;
             }
 
-            // Merge expenseFiles
+            // Merge/append new standard expense files
             if (!existingExpense.expenseFiles) {
                 existingExpense.expenseFiles = { breakfast: [], lunch: [], dinner: [], petrol: [] };
             }
@@ -228,23 +231,18 @@ exports.adminAddExpense = async (req, res) => {
                 }
             });
 
-            // Merge other expenses
-            if (parsedOtherExpenses && parsedOtherExpenses.length > 0) {
-                if (!existingExpense.otherExpensesList) existingExpense.otherExpensesList = [];
-                existingExpense.otherExpensesList.push(...parsedOtherExpenses);
-            }
+            // Overwrite otherExpensesList
+            existingExpense.otherExpensesList = parsedOtherExpenses;
 
-            // Merge Givers and Takers
+            // Merge Givers and Takers if they were provided (or preserve existing)
             if (!existingExpense.creditDebit) {
                 existingExpense.creditDebit = { givenTo: [], receivedFrom: [] };
             }
-            if (parsedGivenTo && parsedGivenTo.length > 0) {
-                if (!existingExpense.creditDebit.givenTo) existingExpense.creditDebit.givenTo = [];
-                existingExpense.creditDebit.givenTo.push(...parsedGivenTo);
+            if (req.body.givenTo !== undefined) {
+                existingExpense.creditDebit.givenTo = parsedGivenTo;
             }
-            if (parsedReceivedFrom && parsedReceivedFrom.length > 0) {
-                if (!existingExpense.creditDebit.receivedFrom) existingExpense.creditDebit.receivedFrom = [];
-                existingExpense.creditDebit.receivedFrom.push(...parsedReceivedFrom);
+            if (req.body.receivedFrom !== undefined) {
+                existingExpense.creditDebit.receivedFrom = parsedReceivedFrom;
             }
 
             // Merge photos, dataFiles, dailyReports
@@ -261,20 +259,21 @@ exports.adminAddExpense = async (req, res) => {
                 existingExpense.dailyReports.push(...dailyReports);
             }
 
-            // Recalculate Totals
-            const newStandardTotal = (Number(existingExpense.expenses.breakfast) || 0) + 
-                                     (Number(existingExpense.expenses.lunch) || 0) + 
-                                     (Number(existingExpense.expenses.dinner) || 0) + 
-                                     (Number(existingExpense.expenses.petrol) || 0);
-            
-            const newOtherTotal = (existingExpense.otherExpensesList || []).reduce((acc, curr) => acc + (Number(curr.amount) || 0), 0);
-            
-            existingExpense.totalExpense = newStandardTotal + newOtherTotal;
+            existingExpense.totalExpense = totalExpense;
             existingExpense.remainingBalance = employee.totalAmount;
 
             savedExpense = await existingExpense.save({ session });
+
+            // Delete old Ledger Entry for Expense so we can recreate it with new amount
+            await EmployeeLedger.deleteMany({ referenceId: existingExpense._id, category: 'Expense' }, { session });
         } else {
             // SAVE AS NEW EXPENSE RECORD
+            employee = await EmployeeMaster.findByIdAndUpdate(
+                employeeId,
+                { $inc: { totalAmount: -netImpact } },
+                { new: true, session }
+            );
+
             const newExpense = new EmployeeExpense({
                 employeeId,
                 date: date || new Date(),
@@ -325,7 +324,7 @@ exports.adminAddExpense = async (req, res) => {
                 type: 'Debit',
                 category: 'Expense',
                 description: existingExpense 
-                    ? `Daily Expense Addition on ${new Date(expenseDate).toLocaleDateString()}`
+                    ? `Daily Expense on ${new Date(expenseDate).toLocaleDateString()} (Updated)`
                     : `Daily Expense on ${new Date(expenseDate).toLocaleDateString()}`,
                 referenceId: savedExpense._id
             }).save({ session });
@@ -626,6 +625,89 @@ exports.getExpensesForEmployee = async (req, res) => {
             .sort({ date: -1 });
         res.json({ success: true, data: expenses });
     } catch (error) {
+        res.status(500).json({ success: false, message: error.message });
+    }
+};
+
+// ── GET: Fetch attendance records for unscheduled employees on a given date ──
+exports.getAttendanceByDate = async (req, res) => {
+    try {
+        const { date } = req.query;
+        if (!date) return res.status(400).json({ success: false, message: 'date query param is required' });
+
+        // Build strict 24-hour local range
+        const [year, month, day] = date.split('-').map(Number);
+        const startOfDay = new Date(year, month - 1, day, 0, 0, 0, 0);
+        const endOfDay   = new Date(year, month - 1, day, 23, 59, 59, 999);
+
+        // Fetch only records that have attendance set but zero expenses
+        // (these are the "attendance-only" records created by bulkSaveAttendance)
+        const records = await EmployeeExpense.find({
+            date: { $gte: startOfDay, $lte: endOfDay },
+            attendance: { $exists: true }
+        }).select('employeeId attendance attendanceRemark');
+
+        const data = records.map(r => ({
+            employeeId: String(r.employeeId),
+            attendance: r.attendance,
+            attendanceRemark: r.attendanceRemark || ''
+        }));
+
+        res.json({ success: true, data });
+    } catch (error) {
+        console.error('getAttendanceByDate Error:', error);
+        res.status(500).json({ success: false, message: error.message });
+    }
+};
+
+// ── POST: Bulk upsert attendance for unscheduled employees (no money touched) ──
+exports.bulkSaveAttendance = async (req, res) => {
+    try {
+        const { entries } = req.body;
+        if (!Array.isArray(entries) || entries.length === 0) {
+            return res.status(400).json({ success: false, message: 'No entries provided' });
+        }
+
+        const saved = [];
+
+        for (const entry of entries) {
+            const { employeeId, date, attendance, attendanceRemark } = entry;
+            if (!employeeId || !date || !attendance) continue;
+
+            // Build strict 24-hour local range for the entry date
+            const [year, month, day] = date.split('-').map(Number);
+            const startOfDay = new Date(year, month - 1, day, 0, 0, 0, 0);
+            const endOfDay   = new Date(year, month - 1, day, 23, 59, 59, 999);
+
+            // Upsert: update attendance if record exists, else create a minimal one
+            const updated = await EmployeeExpense.findOneAndUpdate(
+                {
+                    employeeId,
+                    date: { $gte: startOfDay, $lte: endOfDay }
+                },
+                {
+                    $set: {
+                        attendance,
+                        attendanceRemark: attendanceRemark || ''
+                    },
+                    $setOnInsert: {
+                        employeeId,
+                        date: startOfDay,
+                        expenses: { breakfast: 0, lunch: 0, dinner: 0, petrol: 0 },
+                        otherExpensesList: [],
+                        totalExpense: 0,
+                        clientSites: []
+                    }
+                },
+                { upsert: true, new: true }
+            );
+
+            saved.push({ employeeId: String(updated.employeeId), attendance: updated.attendance, attendanceRemark: updated.attendanceRemark });
+        }
+
+        res.json({ success: true, message: `${saved.length} attendance record(s) saved`, data: saved });
+    } catch (error) {
+        console.error('bulkSaveAttendance Error:', error);
         res.status(500).json({ success: false, message: error.message });
     }
 };

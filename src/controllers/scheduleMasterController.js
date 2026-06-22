@@ -114,6 +114,114 @@ const updateSchedule = async (req, res) => {
             return res.status(400).json({ success: false, message: 'No fields provided for update' });
         }
 
+        // ─────────────────────────────────────────────────────────────────────────
+        // AUTOMATIC EXPENSE & DOCUMENT TRANSFER WHEN OPERATIVE IS CHANGED
+        // ─────────────────────────────────────────────────────────────────────────
+        if ('operative' in updates) {
+            const existingSchedule = await ScheduleMaster.findById(id);
+            const newOperativeId = updates.operative; // null if unassigned, ObjectId string if assigned
+
+            const oldOperativeId = existingSchedule && existingSchedule.operative
+                ? String(existingSchedule.operative)
+                : null;
+
+            // Only run if operative is actually changing
+            const isActualChange = oldOperativeId && oldOperativeId !== String(newOperativeId);
+
+            if (existingSchedule && isActualChange) {
+                try {
+                    // Build a strict 24-hour UTC range for the schedule date
+                    const startOfDay = new Date(existingSchedule.scheduleDate);
+                    startOfDay.setUTCHours(0, 0, 0, 0);
+                    const endOfDay = new Date(startOfDay);
+                    endOfDay.setUTCDate(endOfDay.getUTCDate() + 1);
+
+                    const scheduleIdStr = String(id);
+                    const siteIdStr = String(existingSchedule.site);
+
+                    // Step 1: Find old operative's expense record for this date
+                    const oldExpense = await EmployeeExpense.findOne({
+                        employeeId: existingSchedule.operative,
+                        date: { $gte: startOfDay, $lt: endOfDay }
+                    });
+
+                    if (oldExpense && Array.isArray(oldExpense.clientSites)) {
+                        // Step 2: Find the exact clientSite block for this schedule/site
+                        // Prefer matching by scheduleId, fallback to siteId
+                        let siteIndex = oldExpense.clientSites.findIndex(
+                            cs => cs.scheduleId && String(cs.scheduleId) === scheduleIdStr
+                        );
+                        if (siteIndex === -1) {
+                            siteIndex = oldExpense.clientSites.findIndex(
+                                cs => cs.siteId && String(cs.siteId) === siteIdStr
+                            );
+                        }
+
+                        if (siteIndex !== -1) {
+                            // Extract the block — it contains all files (photos, data, dailyReports, drawing)
+                            const extractedBlock = JSON.parse(
+                                JSON.stringify(oldExpense.clientSites[siteIndex])
+                            );
+
+                            // Step 3: Remove the block from old operative
+                            oldExpense.clientSites.splice(siteIndex, 1);
+
+                            if (oldExpense.clientSites.length === 0) {
+                                // Old operative had ONLY this site — delete their entire expense for the day
+                                await EmployeeExpense.findByIdAndDelete(oldExpense._id);
+                            } else {
+                                // Old operative still has other sites — just save the updated array
+                                oldExpense.markModified('clientSites');
+                                await oldExpense.save();
+                            }
+
+                            // Step 4: Transfer extracted block to NEW operative (if not unassigned)
+                            if (newOperativeId) {
+                                const newExpense = await EmployeeExpense.findOne({
+                                    employeeId: newOperativeId,
+                                    date: { $gte: startOfDay, $lt: endOfDay }
+                                });
+
+                                if (newExpense) {
+                                    // New operative already has an expense sheet for the day
+                                    // Check if this site is already in their sheet to avoid duplicates
+                                    const alreadyExists = newExpense.clientSites.findIndex(
+                                        cs => (cs.scheduleId && String(cs.scheduleId) === scheduleIdStr) ||
+                                              (cs.siteId && String(cs.siteId) === siteIdStr)
+                                    );
+                                    if (alreadyExists === -1) {
+                                        newExpense.clientSites.push(extractedBlock);
+                                    } else {
+                                        // Overwrite their existing block for this site with the transferred one
+                                        newExpense.clientSites[alreadyExists] = extractedBlock;
+                                    }
+                                    newExpense.markModified('clientSites');
+                                    await newExpense.save();
+                                } else {
+                                    // New operative has NO expense sheet yet for this day — create one
+                                    const brandNew = new EmployeeExpense({
+                                        employeeId: newOperativeId,
+                                        date: startOfDay,
+                                        attendance: 'Present',
+                                        expenses: { breakfast: 0, lunch: 0, dinner: 0, petrol: 0 },
+                                        otherExpensesList: [],
+                                        totalExpense: 0,
+                                        clientSites: [extractedBlock]
+                                    });
+                                    await brandNew.save();
+                                }
+                            }
+                            // If newOperativeId is null (unassigned), we already cleaned up above — nothing more to do
+                        }
+                    }
+                } catch (transferErr) {
+                    // Log the error but do NOT block the schedule update itself
+                    console.error('[Operative Transfer] Error during expense/document transfer:', transferErr);
+                }
+            }
+        }
+        // ─────────────────────────────────────────────────────────────────────────
+
         if (updates.scheduleType === 'MONTH' && updates.endDate) {
             const existingSchedule = await ScheduleMaster.findById(id);
             if (existingSchedule && !existingSchedule.monthGroupId) {

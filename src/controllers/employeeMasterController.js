@@ -3,6 +3,67 @@ const EmployeeMaster = require('../models/EmployeeMaster');
 const Counter = require('../models/Counter');
 const path = require('path');
 const fs = require('fs');
+const { sendWhatsapp } = require('../utils/whatsappService');
+
+const sendEmployeeDetailsNotification = async (employee, isNew = false) => {
+    try {
+        if (!employee.phone) {
+            console.log('Employee has no phone number, skipping WhatsApp notification.');
+            return;
+        }
+
+        const title = isNew ? '*🆕 NEW EMPLOYEE REGISTERED*' : '*🔄 EMPLOYEE DETAILS UPDATED*';
+        const bank = employee.bankDetails || {};
+
+        const message = `${title}\n` +
+            `---------------------------------------\n` +
+            `Hello *${employee.name}*,\n\n` +
+            `Your employee profile ${isNew ? 'has been successfully registered' : 'details have been updated'} in our system. Please verify your details below:\n\n` +
+            `*👤 Employee ID:* ${employee.empId}\n` +
+            `*📛 Designation:* ${employee.designation || 'N/A'}\n` +
+            `*📞 Mobile No:* ${employee.phone}\n` +
+            `*📧 Email:* ${employee.email || 'N/A'}\n` +
+            `*💰 Salary:* ₹${parseFloat(employee.salary || 0).toLocaleString()}/month\n` +
+            `*🍽️ Food Allowance:* ${employee.foodAllowance || 'Food'}\n\n` +
+            `*🏦 BANK DETAILS:*\n` +
+            `*   Bank Name:* ${bank.bankName || 'N/A'}\n` +
+            `*   Account Name:* ${bank.accountName || 'N/A'}\n` +
+            `*   Account Number:* ${bank.accountNumber || 'N/A'}\n` +
+            `*   IFSC Code:* ${bank.ifscCode || 'N/A'}\n\n` +
+            `---------------------------------------\n` +
+            `*⚠️ WARNING:*\n` +
+            `Please check your *Bank Account Number* and *IFSC Code* very carefully. If there is any mistake, your salary will be transferred to the wrong account.\n\n` +
+            `*📞 ACTION REQUIRED:*\n` +
+            `After reading this, please reply to this message or call the senior member to confirm that all your details are 100% correct.`;
+
+        console.log(`[WhatsApp] Preparing to send text to: ${employee.phone}`);
+        await sendWhatsapp(employee.phone.toString().trim(), message);
+        console.log('[WhatsApp] Message sent successfully.');
+    } catch (err) {
+        console.error('[WhatsApp] Exception caught sending text:', err);
+    }
+};
+
+const sendEmployeeDeactivationNotification = async (employee) => {
+    try {
+        if (!employee.phone) {
+            console.log('Employee has no phone number, skipping WhatsApp deactivation notification.');
+            return;
+        }
+
+        const message = `*❌ EMPLOYEE STATUS UPDATED: DEACTIVATED*\n` +
+            `---------------------------------------\n` +
+            `Hello *${employee.name}*,\n\n` +
+            `Your employee profile status has been changed to *DEACTIVE* in our system.\n\n` +
+            `If you believe this is a mistake or have any questions, please reply to this message or call the senior member immediately.`;
+
+        console.log(`[WhatsApp] Preparing to send text to: ${employee.phone}`);
+        await sendWhatsapp(employee.phone.toString().trim(), message);
+        console.log('[WhatsApp] Message sent successfully.');
+    } catch (err) {
+        console.error('[WhatsApp] Exception caught sending text:', err);
+    }
+};
 
 const storeEmployeeMaster = async (req, res) => {
     try {
@@ -17,7 +78,11 @@ const storeEmployeeMaster = async (req, res) => {
             emergencyContact,
             bankDetails,
             salary,
-            designation
+            designation,
+            paymentMode,
+            paymentStatus,
+            foodAllowance,
+            status
         } = req.body;
         const files = req.files;
 
@@ -89,6 +154,22 @@ const storeEmployeeMaster = async (req, res) => {
             };
         };
 
+        const filesToArr = (filesArr) => {
+            if (!filesArr) return [];
+            const arr = Array.isArray(filesArr) ? filesArr : [filesArr];
+            return arr.map(f => {
+                let finalPath = f.path;
+                finalPath = finalPath
+                    .replace(`/employee_master/${tempFolderName}/`, `/employee_master/${folderName}/`)
+                    .replace(`\\employee_master\\${tempFolderName}\\`, `\\employee_master\\${folderName}\\`);
+                return {
+                    name: f.originalname,
+                    url: `/uploads/employee_master/${folderName}/${path.basename(f.path)}`,
+                    path: finalPath
+                };
+            });
+        };
+
         const parsedBankDetails = parse(bankDetails) || {};
 
         const record = new EmployeeMaster({
@@ -106,7 +187,12 @@ const storeEmployeeMaster = async (req, res) => {
                 accountName: parsedBankDetails.accountName || '',
                 accountNumber: parsedBankDetails.accountNumber || '',
                 ifscCode: parsedBankDetails.ifscCode || '',
+                documents: filesToArr(files?.bankDocuments),
             },
+            paymentMode: paymentMode || 'Cash',
+            paymentStatus: paymentStatus || 'Pending',
+            foodAllowance: foodAllowance || 'Food',
+            status: status || 'Active',
             photo: fileToObj(files?.photo),
             aadharCard: fileToObj(files?.aadharCard),
             panCard: fileToObj(files?.panCard),
@@ -115,6 +201,11 @@ const storeEmployeeMaster = async (req, res) => {
         });
 
         await record.save();
+        if (record.status === 'Active') {
+            await sendEmployeeDetailsNotification(record, true);
+        } else {
+            await sendEmployeeDeactivationNotification(record);
+        }
         res.status(201).json({
             success: true,
             message: 'Employee record stored successfully',
@@ -135,9 +226,10 @@ const updateEmployeeMaster = async (req, res) => {
         const _id = req.params.id;
         const oldRecord = await EmployeeMaster.findById(_id);
         if (!oldRecord) return res.status(404).json({ success: false, message: 'Employee not found' });
+        const oldStatus = oldRecord.status;
 
         const {
-            name, email, phone, addressLine1, addressLine2, emergencyContact, bankDetails, salary, designation
+            name, email, phone, addressLine1, addressLine2, emergencyContact, bankDetails, salary, designation, paymentMode, paymentStatus, foodAllowance, status
         } = req.body;
         const files = req.files;
 
@@ -205,6 +297,15 @@ const updateEmployeeMaster = async (req, res) => {
                 path: f.path
             };
         };
+        const filesToArr = (filesArr) => {
+            if (!filesArr) return [];
+            const arr = Array.isArray(filesArr) ? filesArr : [filesArr];
+            return arr.map(f => ({
+                name: f.originalname,
+                url: `/uploads/employee_master/${newFolderName}/${path.basename(f.path)}`,
+                path: f.path
+            }));
+        };
 
         const updateUrlPath = (fileObj) => {
             if (!fileObj || !fileObj.url) return null;
@@ -217,6 +318,15 @@ const updateEmployeeMaster = async (req, res) => {
             return fileObj;
         };
 
+        let remainingDocs = [];
+        if (req.body.existingBankDocuments !== undefined) {
+            remainingDocs = parse(req.body.existingBankDocuments) || [];
+            remainingDocs = remainingDocs.map(doc => updateUrlPath(doc)).filter(Boolean);
+        } else {
+            remainingDocs = (oldRecord.bankDetails?.documents || []).map(doc => updateUrlPath(doc)).filter(Boolean);
+        }
+        const newUploads = filesToArr(files?.bankDocuments) || [];
+        const finalDocs = [...remainingDocs, ...newUploads];
         const parsedBankDetails = parse(bankDetails) || {};
 
         if (name !== undefined) oldRecord.name = name;
@@ -233,9 +343,20 @@ const updateEmployeeMaster = async (req, res) => {
                 bankName: pb.bankName !== undefined ? pb.bankName : oldRecord.bankDetails.bankName,
                 accountName: pb.accountName !== undefined ? pb.accountName : oldRecord.bankDetails.accountName,
                 accountNumber: pb.accountNumber !== undefined ? pb.accountNumber : oldRecord.bankDetails.accountNumber,
-                ifscCode: pb.ifscCode !== undefined ? pb.ifscCode : oldRecord.bankDetails.ifscCode
+                ifscCode: pb.ifscCode !== undefined ? pb.ifscCode : oldRecord.bankDetails.ifscCode,
+                documents: finalDocs
             };
+        } else {
+            if (!oldRecord.bankDetails) {
+                oldRecord.bankDetails = {};
+            }
+            oldRecord.bankDetails.documents = finalDocs;
         }
+
+        if (paymentMode !== undefined) oldRecord.paymentMode = paymentMode;
+        if (paymentStatus !== undefined) oldRecord.paymentStatus = paymentStatus;
+        if (foodAllowance !== undefined) oldRecord.foodAllowance = foodAllowance;
+        if (status !== undefined) oldRecord.status = status;
 
         if (files?.photo) oldRecord.photo = fileToObj(files.photo);
         else if (oldRecord.photo) oldRecord.photo = updateUrlPath(oldRecord.photo);
@@ -253,6 +374,27 @@ const updateEmployeeMaster = async (req, res) => {
         else if (oldRecord.drivingLicense) oldRecord.drivingLicense = updateUrlPath(oldRecord.drivingLicense);
 
         await oldRecord.save();
+        const isProfileUpdate = (
+            name !== undefined ||
+            salary !== undefined ||
+            designation !== undefined ||
+            email !== undefined ||
+            phone !== undefined ||
+            bankDetails !== undefined
+        );
+
+        const isDeactivatedNow = (oldStatus === 'Active' && oldRecord.status === 'Deactive');
+        const isActivatedNow = (oldStatus === 'Deactive' && oldRecord.status === 'Active');
+
+        if (isDeactivatedNow) {
+            await sendEmployeeDeactivationNotification(oldRecord);
+        } else if (isActivatedNow) {
+            await sendEmployeeDetailsNotification(oldRecord, false);
+        } else if (oldRecord.status === 'Active' && isProfileUpdate) {
+            await sendEmployeeDetailsNotification(oldRecord, false);
+        } else {
+            console.log('Employee remains in Deactive state. Skipping WhatsApp notification.');
+        }
 
         res.json({ success: true, message: 'Employee updated successfully', data: oldRecord });
     } catch (error) {
@@ -313,11 +455,38 @@ const getEmployeeById = async (req, res) => {
     }
 };
 
+const updateMonthlyPayment = async (req, res) => {
+    try {
+        const _id = req.params.id;
+        const { month, paymentMode, paymentStatus } = req.body;
+        
+        if (!month) return res.status(400).json({ success: false, message: 'Month is required' });
+
+        const employee = await EmployeeMaster.findById(_id);
+        if (!employee) return res.status(404).json({ success: false, message: 'Employee not found' });
+
+        const paymentIndex = employee.monthlyPayments.findIndex(p => p.month === month);
+        if (paymentIndex > -1) {
+            if (paymentMode !== undefined) employee.monthlyPayments[paymentIndex].paymentMode = paymentMode;
+            if (paymentStatus !== undefined) employee.monthlyPayments[paymentIndex].paymentStatus = paymentStatus;
+        } else {
+            employee.monthlyPayments.push({ month, paymentMode: paymentMode || 'Cash', paymentStatus: paymentStatus || 'Pending' });
+        }
+
+        await employee.save();
+        res.json({ success: true, message: 'Monthly payment updated successfully', data: employee });
+    } catch (error) {
+        console.error('Error in updateMonthlyPayment:', error);
+        res.status(500).json({ success: false, message: error.message });
+    }
+};
+
 module.exports = {
     storeEmployeeMaster,
     updateEmployeeMaster,
     getEmployees,
     getEmployeeById,
     getNextEmpId,
-    deleteEmployeeMaster
+    deleteEmployeeMaster,
+    updateMonthlyPayment
 };

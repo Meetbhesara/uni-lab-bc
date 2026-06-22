@@ -50,7 +50,34 @@ const EmployeeMasterSchema = new mongoose.Schema({
         bankName: { type: String, trim: true },
         accountName: { type: String, trim: true },
         accountNumber: { type: String, trim: true },
-        ifscCode: { type: String, trim: true, uppercase: true }
+        ifscCode: { type: String, trim: true, uppercase: true },
+        documents: [
+            {
+                name: String,
+                url: String,
+                path: String
+            }
+        ]
+    },
+    status: {
+        type: String,
+        enum: ['Active', 'Deactive'],
+        default: 'Active'
+    },
+    foodAllowance: {
+        type: String,
+        enum: ['Food', 'Without Food'],
+        default: 'Food'
+    },
+    paymentMode: {
+        type: String,
+        enum: ['Cash', 'Cheque', 'UPI'],
+        default: 'Cash'
+    },
+    paymentStatus: {
+        type: String,
+        enum: ['Pending', 'Done'],
+        default: 'Pending'
     },
     photo: {
         name: String,
@@ -77,6 +104,13 @@ const EmployeeMasterSchema = new mongoose.Schema({
         url: String,
         path: String
     },
+    monthlyPayments: [
+        {
+            month: { type: String, required: true },
+            paymentMode: { type: String, enum: ['Cash', 'Cheque', 'UPI'], default: 'Cash' },
+            paymentStatus: { type: String, enum: ['Pending', 'Done'], default: 'Pending' }
+        }
+    ],
     createdAt: {
         type: Date,
         default: Date.now

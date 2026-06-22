@@ -74,11 +74,21 @@ const getProducts = async (req, res) => {
         }
 
         let showPurchasePrice = false;
+        let showStock = false;
         if (user && user.id) {
             try {
                 const dbUser = await require('../models/User').findById(user.id);
                 if (dbUser && dbUser.isAdmin) {
                     showPurchasePrice = true;
+                    // Check if they have the specific showStock read permission, or if they are superAdmin or legacy admin
+                    if (dbUser.isSuperAdmin) {
+                        showStock = true;
+                    } else if (dbUser.permissions && dbUser.permissions.showStock) {
+                        showStock = !!dbUser.permissions.showStock.read;
+                    } else {
+                        // Legacy admin defaults to true
+                        showStock = true;
+                    }
                 }
             } catch (e) { }
         }
@@ -108,6 +118,9 @@ const getProducts = async (req, res) => {
             if (!showPurchasePrice) {
                 delete p.purchasePrice;
                 delete p.vendors;
+            }
+            if (!showStock) {
+                delete p.stock;
             }
             return p;
         });
@@ -144,12 +157,20 @@ const getProductById = async (req, res) => {
         }
 
         let showPurchasePrice = false;
+        let showStock = false;
 
         if (user && user.id) {
             try {
                 const dbUser = await require('../models/User').findById(user.id);
                 if (dbUser && dbUser.isAdmin) {
                     showPurchasePrice = true;
+                    if (dbUser.isSuperAdmin) {
+                        showStock = true;
+                    } else if (dbUser.permissions && dbUser.permissions.showStock) {
+                        showStock = !!dbUser.permissions.showStock.read;
+                    } else {
+                        showStock = true;
+                    }
                 }
             } catch (e) { }
         }
@@ -160,6 +181,9 @@ const getProductById = async (req, res) => {
         if (!showPurchasePrice) {
             delete p.purchasePrice;
             delete p.vendors;
+        }
+        if (!showStock) {
+            delete p.stock;
         }
 
         res.json(p);
@@ -177,7 +201,7 @@ const createProduct = async (req, res) => {
     console.log('Payload body:', req.body);
     console.log('Uploaded files:', req.files);
     try {
-        const { name, description, category, details, sellingPriceStart, sellingPriceEnd, purchasePrice, dealerPrice, vendor, vendors, alternativeNames } = req.body;
+        const { name, description, category, details, sellingPriceStart, sellingPriceEnd, purchasePrice, dealerPrice, vendor, vendors, alternativeNames, stock } = req.body;
 
         if (!name || !description || !category) {
             console.warn('⚠️ Validation failed: Missing required fields (name, description, category)');
@@ -236,6 +260,14 @@ const createProduct = async (req, res) => {
             }
         }
 
+        let parsedStock = 0;
+        if (stock !== undefined && stock !== null && stock !== '') {
+            parsedStock = Number(stock);
+            if (isNaN(parsedStock) || parsedStock < 0) {
+                return res.status(400).json({ msg: 'Stock must be a non-negative number' });
+            }
+        }
+
         const newProduct = new Product({
             name,
             description,
@@ -249,7 +281,8 @@ const createProduct = async (req, res) => {
             vendors: parsedVendors,
             alternativeNames: parsedAlternativeNames,
             images,
-            pdf
+            pdf,
+            stock: parsedStock
         });
 
         const product = await newProduct.save();
@@ -285,6 +318,7 @@ const updateProduct = async (req, res) => {
         const purchasePrice = cleanNumber(req.body.purchasePrice);
         const dealerPrice = cleanNumber(req.body.dealerPrice);
         const vendor = req.body.vendor;
+        const stock = cleanNumber(req.body.stock);
 
         if (name) product.name = name;
         if (description) product.description = description;
@@ -294,6 +328,13 @@ const updateProduct = async (req, res) => {
         if (purchasePrice !== undefined) product.purchasePrice = purchasePrice;
         if (dealerPrice !== undefined) product.dealerPrice = dealerPrice;
         if (vendor !== undefined) product.vendor = vendor;
+        if (stock !== undefined) {
+            const parsedStock = Number(stock);
+            if (isNaN(parsedStock) || parsedStock < 0) {
+                return res.status(400).json({ msg: 'Stock must be a non-negative number' });
+            }
+            product.stock = parsedStock;
+        }
 
         if (vendors !== undefined) {
             let parsedVendors = vendors;

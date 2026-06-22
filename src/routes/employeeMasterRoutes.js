@@ -3,7 +3,7 @@ const router = express.Router();
 const multer = require('multer');
 const path = require('path');
 const fs = require('fs');
-const { storeEmployeeMaster, updateEmployeeMaster, getEmployees, getNextEmpId, deleteEmployeeMaster, getEmployeeById } = require('../controllers/employeeMasterController');
+const { storeEmployeeMaster, updateEmployeeMaster, getEmployees, getNextEmpId, deleteEmployeeMaster, getEmployeeById, updateMonthlyPayment } = require('../controllers/employeeMasterController');
 
 // Dynamic Storage Configuration
 const storage = multer.diskStorage({
@@ -59,7 +59,8 @@ router.post('/', upload.fields([
     { name: 'aadharCard', maxCount: 1 },
     { name: 'panCard', maxCount: 1 },
     { name: 'voterId', maxCount: 1 },
-    { name: 'drivingLicense', maxCount: 1 }
+    { name: 'drivingLicense', maxCount: 1 },
+    { name: 'bankDocuments', maxCount: 10 }
 ]), storeEmployeeMaster);
 
 router.put('/:id', upload.fields([
@@ -67,10 +68,12 @@ router.put('/:id', upload.fields([
     { name: 'aadharCard', maxCount: 1 },
     { name: 'panCard', maxCount: 1 },
     { name: 'voterId', maxCount: 1 },
-    { name: 'drivingLicense', maxCount: 1 }
+    { name: 'drivingLicense', maxCount: 1 },
+    { name: 'bankDocuments', maxCount: 10 }
 ]), updateEmployeeMaster);
 
 router.get('/', getEmployees);
 router.delete('/:id', deleteEmployeeMaster);
+router.put('/:id/monthly-payment', updateMonthlyPayment);
 
 module.exports = router;

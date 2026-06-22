@@ -17,6 +17,7 @@ const ProductSchema = new mongoose.Schema({
     alternativeNames: [String],
     images: [String], // Array of URLs
     pdf: { type: String }, // PDF URL
+    stock: { type: Number, default: 0, min: 0 },
     createdAt: { type: Date, default: Date.now }
 });
 

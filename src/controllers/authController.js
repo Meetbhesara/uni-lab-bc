@@ -7,6 +7,17 @@ const speakeasy = require('speakeasy');
 const QRCode = require('qrcode');
 const crypto = require('crypto');
 
+const getMe = async (req, res) => {
+    try {
+        const user = await User.findById(req.user.id).select('-password -twoFactorSecret -backupCodes');
+        if (!user) return res.status(404).json({ msg: 'User not found' });
+        res.json({ id: user.id, name: user.name, email: user.email, phone: user.phone, isAdmin: user.isAdmin, isSuperAdmin: user.isSuperAdmin, permissions: user.permissions, companyName: user.companyName, contactPersonName: user.contactPersonName, gstNumber: user.gstNumber });
+    } catch (err) {
+        console.error(err.message);
+        res.status(500).send('Server Error');
+    }
+};
+
 const register = async (req, res) => {
     const { name, email, phone, password } = req.body;
 
@@ -256,7 +267,7 @@ const verifyOtp = async (req, res) => {
         const payload = { id: user.id, isAdmin: user.isAdmin };
         jwt.sign(payload, process.env.JWT_SECRET, { expiresIn: process.env.JWT_EXPIRE || '365d' }, (err, token) => {
             if (err) throw err;
-            res.json({ token, user: { id: user.id, name: user.name, email: user.email, phone: user.phone, isAdmin: user.isAdmin, companyName: user.companyName, contactPersonName: user.contactPersonName, gstNumber: user.gstNumber } });
+            res.json({ token, user: { id: user.id, name: user.name, email: user.email, phone: user.phone, isAdmin: user.isAdmin, isSuperAdmin: user.isSuperAdmin, permissions: user.permissions, companyName: user.companyName, contactPersonName: user.contactPersonName, gstNumber: user.gstNumber } });
         });
     } catch (err) {
         console.error(err.message);
@@ -324,7 +335,7 @@ const verifyAdminOtp = async (req, res) => {
         const payload = { id: user.id, isAdmin: user.isAdmin };
         jwt.sign(payload, process.env.JWT_SECRET, { expiresIn: process.env.JWT_EXPIRE || '1h' }, (err, token) => {
             if (err) throw err;
-            res.json({ token, user: { id: user.id, name: user.name, email: user.email, phone: user.phone, isAdmin: user.isAdmin } });
+            res.json({ token, user: { id: user.id, name: user.name, email: user.email, phone: user.phone, isAdmin: user.isAdmin, isSuperAdmin: user.isSuperAdmin, permissions: user.permissions } });
         });
     } catch (err) {
         console.error(err.message);
@@ -419,7 +430,7 @@ const loginWith2FA = async (req, res) => {
             const payload = { id: user.id, isAdmin: user.isAdmin };
             jwt.sign(payload, process.env.JWT_SECRET, { expiresIn: '1h' }, (err, token) => {
                 if (err) throw err;
-                res.json({ token, user: { id: user.id, name: user.name, email: user.email, phone: user.phone, isAdmin: user.isAdmin } });
+                res.json({ token, user: { id: user.id, name: user.name, email: user.email, phone: user.phone, isAdmin: user.isAdmin, isSuperAdmin: user.isSuperAdmin, permissions: user.permissions } });
             });
         } else {
             res.status(400).json({ msg: 'Invalid TOTP token' });
@@ -469,4 +480,29 @@ const resetWithBackupCode = async (req, res) => {
     }
 };
 
-module.exports = { register, login, phoneLogin, phoneRegister, getUserByPhone, sendOtp, verifyOtp, sendAdminOtp, verifyAdminOtp, createAdmin, setup2FA, verifyAndEnable2FA, loginWith2FA, resetWithBackupCode };
+const getAdmins = async (req, res) => {
+    try {
+        const admins = await User.find({ isAdmin: true }).select('-password -twoFactorSecret');
+        res.json(admins);
+    } catch (err) {
+        console.error(err.message);
+        res.status(500).send('Server Error');
+    }
+};
+
+const updateAdminPermissions = async (req, res) => {
+    try {
+        const { permissions } = req.body;
+        const user = await User.findById(req.params.id);
+        if (!user || !user.isAdmin) return res.status(404).json({ msg: 'Admin not found' });
+        
+        user.permissions = permissions;
+        await user.save();
+        res.json({ success: true, user });
+    } catch (err) {
+        console.error(err.message);
+        res.status(500).send('Server Error');
+    }
+};
+
+module.exports = { register, login, phoneLogin, phoneRegister, getUserByPhone, sendOtp, verifyOtp, sendAdminOtp, verifyAdminOtp, createAdmin, setup2FA, verifyAndEnable2FA, loginWith2FA, resetWithBackupCode, getAdmins, updateAdminPermissions, getMe };

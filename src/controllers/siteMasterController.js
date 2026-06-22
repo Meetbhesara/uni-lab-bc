@@ -599,6 +599,7 @@ const getAllGlobalDocuments = async (req, res) => {
                                     documentUrl: f.url,
                                     source: 'EmployeeExpense',
                                     expenseId: expense._id,
+                                    scheduleId: cs.scheduleId,
                                     client: cs.clientId,
                                     site: cs.siteId,
                                     receivedDate: f.uploadedAt || expense.date || new Date(),

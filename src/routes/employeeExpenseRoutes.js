@@ -119,4 +119,8 @@ router.post('/admin/add-expense', upload.any(), employeeExpenseController.adminA
 
 router.delete('/:id', employeeExpenseController.deleteExpense);
 
+// Attendance routes for unscheduled employees
+router.get('/attendance', employeeExpenseController.getAttendanceByDate);
+router.post('/bulk-attendance', employeeExpenseController.bulkSaveAttendance);
+
 module.exports = router;
