@@ -17,6 +17,10 @@ const ProductSchema = new mongoose.Schema({
     alternativeNames: [String],
     images: [String], // Array of URLs
     pdf: { type: String }, // PDF URL
+    localImages: [String], // Array of local/NAS relative URLs
+    localPdf: { type: String }, // Local/NAS relative URL
+    localVideos: [String], // Array of local/NAS relative video paths
+    videoLinks: [String], // Array of external video links/URLs (e.g. YouTube)
     stock: { type: Number, default: 0, min: 0 },
     createdAt: { type: Date, default: Date.now }
 });

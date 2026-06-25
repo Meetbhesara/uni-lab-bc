@@ -21,16 +21,16 @@ const upload = multer({
 // Check File Type
 function checkFileType(file, cb) {
     // Allowed ext
-    const filetypes = /jpeg|jpg|png|gif|pdf/;
+    const filetypes = /jpeg|jpg|png|gif|pdf|mp4|webm|mkv|avi|mov/;
     // Check ext
     const extname = filetypes.test(path.extname(file.originalname).toLowerCase());
-    // Check mime
-    const mimetype = filetypes.test(file.mimetype);
+    // Check mime (match image, pdf, or video mimetypes)
+    const mimetype = /jpeg|jpg|png|gif|pdf|video\//.test(file.mimetype);
 
     if (mimetype && extname) {
         return cb(null, true);
     } else {
-        cb('Error: Images/PDF Only!');
+        cb('Error: Only images, PDFs, and video files are allowed!');
     }
 }
 

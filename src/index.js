@@ -29,7 +29,7 @@ const whatsappRoutes = require('./routes/whatsappRoutes');
 const draftingWorkRoutes = require('./routes/draftingWorkRoutes');
 const path = require('path');
 const fs = require('fs');
-const { initialize: initializeWhatsapp } = require('./utils/whatsappService');
+const { initializeAll: initializeWhatsapp } = require('./utils/whatsappService');
 
 app.use('/api/auth', authRoutes);
 app.use('/api/products', productRoutes);
@@ -60,13 +60,14 @@ if (useNasFlag === 'true' && !nasRoot.startsWith('/')) {
 }
 const localRoot = process.env.LOCAL_BASE_PATH || './uploads';
 
-let vehicleMasterUploadPath, employeeMasterUploadPath, clientMasterUploadPath, siteMasterUploadPath, instrumentMasterUploadPath;
+let vehicleMasterUploadPath, employeeMasterUploadPath, clientMasterUploadPath, siteMasterUploadPath, instrumentMasterUploadPath, productsUploadPath;
 if (useNasFlag === 'true') {
     vehicleMasterUploadPath = path.join(nasRoot, 'vehicle_master');
     employeeMasterUploadPath = path.join(nasRoot, 'employee_master');
     clientMasterUploadPath = path.join(nasRoot, 'client_master');
     siteMasterUploadPath = path.join(nasRoot, 'site_master');
     instrumentMasterUploadPath = path.join(nasRoot, 'instrument_master');
+    productsUploadPath = path.join(nasRoot, 'products');
 } else {
     vehicleMasterUploadPath = path.isAbsolute(localRoot)
         ? path.join(localRoot, 'vehicle_master')
@@ -83,6 +84,9 @@ if (useNasFlag === 'true') {
     instrumentMasterUploadPath = path.isAbsolute(localRoot)
         ? path.join(localRoot, 'instrument_master')
         : path.join(process.cwd(), localRoot, 'instrument_master');
+    productsUploadPath = path.isAbsolute(localRoot)
+        ? path.join(localRoot, 'products')
+        : path.join(process.cwd(), localRoot, 'products');
 }
 
 // Initialize and Ensure Directories Exist
@@ -93,6 +97,10 @@ const ensureDirectories = () => {
         clientMasterUploadPath,
         siteMasterUploadPath,
         instrumentMasterUploadPath,
+        productsUploadPath,
+        path.join(productsUploadPath, 'images'),
+        path.join(productsUploadPath, 'pdfs'),
+        path.join(productsUploadPath, 'videos'),
         path.join(process.cwd(), 'uploads'),
         path.join(process.cwd(), 'whatsapp_auth')
     ];
@@ -125,6 +133,9 @@ app.use('/api/uploads/site_master', exprees.static(siteMasterUploadPath));
 
 app.use('/uploads/instrument_master', exprees.static(instrumentMasterUploadPath));
 app.use('/api/uploads/instrument_master', exprees.static(instrumentMasterUploadPath));
+
+app.use('/uploads/products', exprees.static(productsUploadPath));
+app.use('/api/uploads/products', exprees.static(productsUploadPath));
 
 // Generic Fallback for other uploads (like Quotation PDFs in local folder)
 app.use('/uploads', exprees.static('uploads'));

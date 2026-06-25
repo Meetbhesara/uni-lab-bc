@@ -235,7 +235,7 @@ const sendOtp = async (req, res) => {
         await user.save();
 
         const msg = `Your Unique Lab Instrument verification OTP is: *${otp}*\nValid for 10 minutes.`;
-        await sendWhatsapp(targetPhone, msg);
+        await sendWhatsapp(targetPhone, msg, null, true);
 
         res.json({ msg: `OTP sent successfully to your WhatsApp ending in ${targetPhone.slice(-4)}` });
     } catch (err) {
@@ -298,7 +298,7 @@ const sendAdminOtp = async (req, res) => {
         let whatsappStatus = 'sent';
         try {
             const msg = `Your Unique Engineering *Admin Login OTP* is: *${otp}*\nValid for 10 minutes. Do not share this code.`;
-            await sendWhatsapp(targetPhone, msg);
+            await sendWhatsapp(targetPhone, msg, null, true);
         } catch (wsErr) {
             console.error('WhatsApp Send Failure:', wsErr.message);
             whatsappStatus = 'failed';

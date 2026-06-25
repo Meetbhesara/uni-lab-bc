@@ -5,7 +5,7 @@ const path = require('path');
 const fs = require('fs');
 const { sendWhatsapp } = require('../utils/whatsappService');
 
-const sendEmployeeDetailsNotification = async (employee, isNew = false) => {
+const sendEmployeeDetailsNotification = async (employee, isNew = true, adminId = null) => {
     try {
         if (!employee.phone) {
             console.log('Employee has no phone number, skipping WhatsApp notification.');
@@ -37,14 +37,14 @@ const sendEmployeeDetailsNotification = async (employee, isNew = false) => {
             `After reading this, please reply to this message or call the senior member to confirm that all your details are 100% correct.`;
 
         console.log(`[WhatsApp] Preparing to send text to: ${employee.phone}`);
-        await sendWhatsapp(employee.phone.toString().trim(), message);
+        await sendWhatsapp(employee.phone.toString().trim(), message, adminId, false);
         console.log('[WhatsApp] Message sent successfully.');
     } catch (err) {
         console.error('[WhatsApp] Exception caught sending text:', err);
     }
 };
 
-const sendEmployeeDeactivationNotification = async (employee) => {
+const sendEmployeeDeactivationNotification = async (employee, adminId = null) => {
     try {
         if (!employee.phone) {
             console.log('Employee has no phone number, skipping WhatsApp deactivation notification.');
@@ -58,7 +58,7 @@ const sendEmployeeDeactivationNotification = async (employee) => {
             `If you believe this is a mistake or have any questions, please reply to this message or call the senior member immediately.`;
 
         console.log(`[WhatsApp] Preparing to send text to: ${employee.phone}`);
-        await sendWhatsapp(employee.phone.toString().trim(), message);
+        await sendWhatsapp(employee.phone.toString().trim(), message, adminId, false);
         console.log('[WhatsApp] Message sent successfully.');
     } catch (err) {
         console.error('[WhatsApp] Exception caught sending text:', err);
@@ -202,9 +202,9 @@ const storeEmployeeMaster = async (req, res) => {
 
         await record.save();
         if (record.status === 'Active') {
-            await sendEmployeeDetailsNotification(record, true);
+            await sendEmployeeDetailsNotification(record, true, req.user?.id);
         } else {
-            await sendEmployeeDeactivationNotification(record);
+            await sendEmployeeDeactivationNotification(record, req.user?.id);
         }
         res.status(201).json({
             success: true,
@@ -387,11 +387,11 @@ const updateEmployeeMaster = async (req, res) => {
         const isActivatedNow = (oldStatus === 'Deactive' && oldRecord.status === 'Active');
 
         if (isDeactivatedNow) {
-            await sendEmployeeDeactivationNotification(oldRecord);
+            await sendEmployeeDeactivationNotification(oldRecord, req.user?.id);
         } else if (isActivatedNow) {
-            await sendEmployeeDetailsNotification(oldRecord, false);
+            await sendEmployeeDetailsNotification(oldRecord, false, req.user?.id);
         } else if (oldRecord.status === 'Active' && isProfileUpdate) {
-            await sendEmployeeDetailsNotification(oldRecord, false);
+            await sendEmployeeDetailsNotification(oldRecord, false, req.user?.id);
         } else {
             console.log('Employee remains in Deactive state. Skipping WhatsApp notification.');
         }

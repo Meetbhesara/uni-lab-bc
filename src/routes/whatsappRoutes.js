@@ -1,6 +1,25 @@
 const express = require('express');
 const router = express.Router();
-const { sendWhatsapp, sendWhatsappMedia } = require('../utils/whatsappService');
+const { sendWhatsapp, sendWhatsappMedia, getStatus, initialize, disconnect } = require('../utils/whatsappService');
+const auth = require('../middlewares/auth');
+
+// WhatsApp Session Management Routes
+router.get('/status', auth, (req, res) => {
+    const sessionId = req.query.sessionId || `admin_${req.user.id}`;
+    res.json(getStatus(sessionId));
+});
+
+router.post('/connect', auth, (req, res) => {
+    const sessionId = req.body.sessionId || `admin_${req.user.id}`;
+    initialize(sessionId);
+    res.json({ success: true, msg: `Initializing session ${sessionId}` });
+});
+
+router.post('/disconnect', auth, async (req, res) => {
+    const sessionId = req.body.sessionId || `admin_${req.user.id}`;
+    await disconnect(sessionId);
+    res.json({ success: true, msg: `Disconnected session ${sessionId}` });
+});
 
 const Quotation = require('../models/Quotation');
 const PDFDocument = require('pdfkit');
@@ -49,9 +68,10 @@ const generateQuotationPDF = async (htmlContent, outputPath) => {
     }
 };
 
-router.post('/send-quotation', async (req, res) => {
+router.post('/send-quotation', auth, async (req, res) => {
     try {
         const { logToFile } = require('../utils/whatsappService');
+        const adminId = req.user?.id;
         
         console.log('\n--- [DEBUG] WhatsApp Quotation Request Received ---');
         logToFile('[DEBUG] WhatsApp Quotation Request Received', req.body);
@@ -106,7 +126,7 @@ router.post('/send-quotation', async (req, res) => {
             return res.status(400).json({ success: false, error: 'Cannot send quotation: The Quotation does not have a PDF file attached or passed in payload.' });
         }
 
-        await sendWhatsappMedia(targetPhone, targetPdf, targetMessage);
+        await sendWhatsappMedia(targetPhone, targetPdf, targetMessage, adminId);
         
         res.status(200).json({ success: true, msg: 'WhatsApp quotation sent!' });
     } catch (e) {
@@ -117,13 +137,14 @@ router.post('/send-quotation', async (req, res) => {
     }
 });
 
-router.post('/send-product', async (req, res) => {
+router.post('/send-product', auth, async (req, res) => {
     try {
         const { phone, imageUrl, caption } = req.body;
+        const adminId = req.user?.id;
         if (imageUrl) {
-            await sendWhatsappMedia(phone, imageUrl, caption);
+            await sendWhatsappMedia(phone, imageUrl, caption, adminId);
         } else {
-            await sendWhatsapp(phone, caption);
+            await sendWhatsapp(phone, caption, adminId);
         }
         res.status(200).json({ success: true, msg: 'WhatsApp product sent!' });
     } catch (e) {

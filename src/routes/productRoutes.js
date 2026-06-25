@@ -5,7 +5,12 @@ const verifyAdmin = require('../middlewares/verifyAdmin');
 const upload = require('../middlewares/upload');
 
 // Configure upload fields
-const cpUpload = upload.fields([{ name: 'images', maxCount: 50 }, { name: 'pdf', maxCount: 1 }, { name: 'photos', maxCount: 50 }]);
+const cpUpload = upload.fields([
+    { name: 'images', maxCount: 50 },
+    { name: 'pdf', maxCount: 1 },
+    { name: 'photos', maxCount: 50 },
+    { name: 'videos', maxCount: 50 }
+]);
 
 router.get('/', productController.getProducts);
 router.get('/:id', productController.getProductById);

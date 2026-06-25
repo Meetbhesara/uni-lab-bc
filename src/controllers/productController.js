@@ -8,6 +8,62 @@ const getUserFromRequest = (req) => {
     return req.user || null;
 };
 
+// ... Local & NAS Storage Helpers ...
+const useNasFlag = process.env.USE_NAS;
+let nasRoot = process.env.NAS_BASE_PATH || '/app/storage';
+if (useNasFlag === 'true' && !nasRoot.startsWith('/')) {
+    nasRoot = '/' + nasRoot;
+}
+const localRoot = process.env.LOCAL_BASE_PATH || './uploads';
+
+// Resolve products base path
+let productsUploadPath;
+if (useNasFlag === 'true') {
+    productsUploadPath = path.join(nasRoot, 'products');
+} else {
+    productsUploadPath = path.isAbsolute(localRoot)
+        ? path.join(localRoot, 'products')
+        : path.join(process.cwd(), localRoot, 'products');
+}
+
+const saveLocalFile = (file, subfolder) => {
+    const destDir = path.join(productsUploadPath, subfolder);
+    if (!fs.existsSync(destDir)) {
+        fs.mkdirSync(destDir, { recursive: true });
+    }
+    const fileName = file.fieldname + '-' + Date.now() + '-' + Math.round(Math.random() * 1e9) + path.extname(file.originalname);
+    const destPath = path.join(destDir, fileName);
+    
+    try {
+        fs.renameSync(file.path, destPath);
+    } catch (err) {
+        if (err.code === 'EXDEV') {
+            fs.copyFileSync(file.path, destPath);
+            fs.unlinkSync(file.path);
+        } else {
+            throw err;
+        }
+    }
+    
+    return `/api/uploads/products/${subfolder}/${fileName}`;
+};
+
+const removeLocalFile = (relativePath) => {
+    if (!relativePath || relativePath.startsWith('http')) return;
+    try {
+        const parts = relativePath.split('/api/uploads/products/');
+        if (parts.length === 2) {
+            const filePath = path.join(productsUploadPath, parts[1]);
+            if (fs.existsSync(filePath)) {
+                fs.unlinkSync(filePath);
+                console.log(`🗑️ Deleted local file: ${filePath}`);
+            }
+        }
+    } catch (err) {
+        console.error('Error removing local file:', err);
+    }
+};
+
 // ... Helper Functions ...
 const uploadToCloudinary = async (filePath, folder, resourceType = 'image') => {
     try {
@@ -201,7 +257,7 @@ const createProduct = async (req, res) => {
     console.log('Payload body:', req.body);
     console.log('Uploaded files:', req.files);
     try {
-        const { name, description, category, details, sellingPriceStart, sellingPriceEnd, purchasePrice, dealerPrice, vendor, vendors, alternativeNames, stock } = req.body;
+        const { name, description, category, details, sellingPriceStart, sellingPriceEnd, purchasePrice, dealerPrice, vendor, vendors, alternativeNames, stock, videoLinks } = req.body;
 
         if (!name || !description || !category) {
             console.warn('⚠️ Validation failed: Missing required fields (name, description, category)');
@@ -210,18 +266,40 @@ const createProduct = async (req, res) => {
 
         let images = [];
         let pdf = '';
+        let localImages = [];
+        let localPdf = '';
+        let localVideos = [];
 
         if (req.files) {
-            if (req.files.images) {
-                const imageFiles = Array.isArray(req.files.images) ? req.files.images : [req.files.images];
-                const imagePromises = imageFiles.map(file =>
-                    uploadToCloudinary(file.path, 'products/images', 'image')
-                );
-                images = await Promise.all(imagePromises);
+            const imgFiles = req.files.images || req.files.photos;
+            if (imgFiles) {
+                const imageFiles = Array.isArray(imgFiles) ? imgFiles : [imgFiles];
+                const localPromises = imageFiles.map(file => saveLocalFile(file, 'images'));
+                localImages = await Promise.all(localPromises);
+                images = localImages;
             }
             if (req.files.pdf) {
                 const pdfFiles = Array.isArray(req.files.pdf) ? req.files.pdf : [req.files.pdf];
-                pdf = await uploadToCloudinary(pdfFiles[0].path, 'products/pdfs', 'raw');
+                localPdf = saveLocalFile(pdfFiles[0], 'pdfs');
+                pdf = localPdf;
+            }
+            if (req.files.videos) {
+                const videoFiles = Array.isArray(req.files.videos) ? req.files.videos : [req.files.videos];
+                const localPromises = videoFiles.map(file => saveLocalFile(file, 'videos'));
+                localVideos = await Promise.all(localPromises);
+            }
+        }
+
+        let parsedVideoLinks = [];
+        if (videoLinks) {
+            if (typeof videoLinks === 'string') {
+                try {
+                    parsedVideoLinks = JSON.parse(videoLinks);
+                } catch (e) {
+                    parsedVideoLinks = [videoLinks];
+                }
+            } else if (Array.isArray(videoLinks)) {
+                parsedVideoLinks = videoLinks;
             }
         }
 
@@ -282,6 +360,10 @@ const createProduct = async (req, res) => {
             alternativeNames: parsedAlternativeNames,
             images,
             pdf,
+            localImages,
+            localPdf,
+            localVideos,
+            videoLinks: parsedVideoLinks,
             stock: parsedStock
         });
 
@@ -305,7 +387,7 @@ const updateProduct = async (req, res) => {
             return res.status(404).json({ msg: 'Product not found' });
         }
 
-        const { name, description, category, details, alternativeNames, vendors } = req.body;
+        const { name, description, category, details, alternativeNames, vendors, videoLinks } = req.body;
 
         // Helper to clean numbers
         const cleanNumber = (val) => {
@@ -377,6 +459,22 @@ const updateProduct = async (req, res) => {
             product.markModified('details');
         }
 
+        if (videoLinks !== undefined) {
+            let parsedVideoLinks = videoLinks;
+            if (typeof videoLinks === 'string') {
+                try {
+                    if (videoLinks.trim().startsWith('[')) {
+                        parsedVideoLinks = JSON.parse(videoLinks);
+                    } else {
+                        parsedVideoLinks = [videoLinks];
+                    }
+                } catch (e) {
+                    parsedVideoLinks = [];
+                }
+            }
+            product.videoLinks = parsedVideoLinks;
+        }
+
         let currentImages = [];
         if (req.body.existingPhotos) {
             currentImages = Array.isArray(req.body.existingPhotos)
@@ -396,23 +494,40 @@ const updateProduct = async (req, res) => {
 
         if (req.body.existingPhotos) {
             product.images = currentImages;
+            product.localImages = currentImages;
+        }
+
+        let currentVideos = [];
+        if (req.body.existingVideos) {
+            currentVideos = Array.isArray(req.body.existingVideos)
+                ? req.body.existingVideos
+                : [req.body.existingVideos];
+            product.localVideos = currentVideos;
         }
 
         if (req.files) {
             const imageFiles = req.files.images || req.files.photos;
             if (imageFiles) {
                 const imgArr = Array.isArray(imageFiles) ? imageFiles : [imageFiles];
-                const imagePromises = imgArr.map(file =>
-                    uploadToCloudinary(file.path, 'products/images', 'image')
-                );
-                const newImages = await Promise.all(imagePromises);
+                const localPromises = imgArr.map(file => saveLocalFile(file, 'images'));
+                const newImages = await Promise.all(localPromises);
                 if (!product.images) product.images = [];
                 product.images.push(...newImages);
+                if (!product.localImages) product.localImages = [];
+                product.localImages.push(...newImages);
             }
             if (req.files.pdf) {
                 const pdfFiles = Array.isArray(req.files.pdf) ? req.files.pdf : [req.files.pdf];
-                const pdfUrl = await uploadToCloudinary(pdfFiles[0].path, 'products/pdfs', 'raw');
-                product.pdf = pdfUrl;
+                const localPdfUrl = saveLocalFile(pdfFiles[0], 'pdfs');
+                product.pdf = localPdfUrl;
+                product.localPdf = localPdfUrl;
+            }
+            if (req.files.videos) {
+                const videoFiles = Array.isArray(req.files.videos) ? req.files.videos : [req.files.videos];
+                const localPromises = videoFiles.map(file => saveLocalFile(file, 'videos'));
+                const newVideos = await Promise.all(localPromises);
+                if (!product.localVideos) product.localVideos = [];
+                product.localVideos.push(...newVideos);
             }
         }
 
@@ -432,12 +547,34 @@ const deleteProduct = async (req, res) => {
         if (!product) return res.status(404).json({ msg: 'Product not found' });
 
         if (product.images && product.images.length > 0) {
-            const deletePromises = product.images.map(imageUrl => removeFromCloudinary(imageUrl, 'image'));
+            const deletePromises = product.images.map(imageUrl => {
+                if (imageUrl.includes('cloudinary.com')) {
+                    return removeFromCloudinary(imageUrl, 'image');
+                } else {
+                    removeLocalFile(imageUrl);
+                }
+            });
             await Promise.all(deletePromises);
         }
 
         if (product.pdf) {
-            await removeFromCloudinary(product.pdf, 'raw');
+            if (product.pdf.includes('cloudinary.com')) {
+                await removeFromCloudinary(product.pdf, 'raw');
+            } else {
+                removeLocalFile(product.pdf);
+            }
+        }
+
+        if (product.localImages && product.localImages.length > 0) {
+            product.localImages.forEach(img => removeLocalFile(img));
+        }
+
+        if (product.localPdf) {
+            removeLocalFile(product.localPdf);
+        }
+
+        if (product.localVideos && product.localVideos.length > 0) {
+            product.localVideos.forEach(vid => removeLocalFile(vid));
         }
 
         await product.deleteOne();

@@ -22,7 +22,7 @@ const sendEmployeeOtp = async (req, res) => {
         otpStore.set(phone.toString().trim(), { otp, expires, employeeId: employee._id });
 
         const msg = `🏗️ *Unique Engineering*\n\nYour Employee Login OTP: *${otp}*\n\nValid for 10 minutes. Do not share this code.`;
-        await sendWhatsapp(phone.toString().trim(), msg);
+        await sendWhatsapp(phone.toString().trim(), msg, null, true);
 
         console.log(`[EmployeeAuth] OTP ${otp} sent to ${phone} for employee ${employee.name}`);
         res.json({ success: true, msg: `OTP sent to WhatsApp number ending in ...${phone.toString().slice(-4)}` });
