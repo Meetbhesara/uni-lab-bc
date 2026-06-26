@@ -14,6 +14,29 @@ if (!fs.existsSync(whatsappAuthPath)) {
     fs.mkdirSync(whatsappAuthPath, { recursive: true });
 }
 
+// ── Clean stale Chrome lock files ─────────────────────────────────────────────
+// When the Docker container restarts, Chrome leaves behind SingletonLock files
+// from the previous run. These prevent a new Chrome from starting (Code: 21).
+// This function deletes those lock files before every session initialization.
+const cleanChromeLock = (sessionId) => {
+    const LOCK_FILES = ['SingletonLock', 'SingletonCookie', 'SingletonSocket'];
+    const profilePath = path.join(whatsappAuthPath, `session-${sessionId}`);
+    if (!fs.existsSync(profilePath)) return;
+    LOCK_FILES.forEach(lockFile => {
+        const lockPath = path.join(profilePath, lockFile);
+        if (fs.existsSync(lockPath)) {
+            try {
+                fs.unlinkSync(lockPath);
+                console.log(`[WhatsApp] 🧹 Removed stale lock file: ${lockFile} (session: ${sessionId})`);
+                logToFile(`Removed stale Chrome lock: ${lockFile}`, { sessionId });
+            } catch (err) {
+                console.warn(`[WhatsApp] Could not remove lock file ${lockFile}:`, err.message);
+            }
+        }
+    });
+};
+// ─────────────────────────────────────────────────────────────────────────────
+
 // In-memory mappings
 const clients = new Map();
 const clientStatus = new Map(); // 'disconnected' | 'initializing' | 'qr' | 'ready'
@@ -42,7 +65,10 @@ const initialize = (sessionId = 'system_default') => {
 
     console.log(`[WhatsApp] Initializing WhatsApp Client for session: ${sessionId}`);
     logToFile(`Initializing session: ${sessionId}`);
-    
+
+    // 🧹 Always clean stale Chrome lock files before starting
+    cleanChromeLock(sessionId);
+
     clientStatus.set(sessionId, 'initializing');
     clientQrs.delete(sessionId);
 
@@ -156,6 +182,24 @@ const disconnect = async (sessionId) => {
 
 // Scan directory and boot all stored sessions
 const initializeAll = () => {
+    console.log('[WhatsApp] 🚀 Starting all sessions — cleaning stale locks first...');
+
+    // Pre-clean ALL session lock files before any initialization
+    // This is critical on Docker container restarts
+    try {
+        if (fs.existsSync(whatsappAuthPath)) {
+            const files = fs.readdirSync(whatsappAuthPath);
+            files.forEach(file => {
+                if (file.startsWith('session-')) {
+                    const sessionId = file.replace('session-', '');
+                    cleanChromeLock(sessionId);
+                }
+            });
+        }
+    } catch (e) {
+        console.warn('[WhatsApp] Pre-clean warning:', e.message);
+    }
+
     // 1. Initialize system_default
     initialize('system_default');
 

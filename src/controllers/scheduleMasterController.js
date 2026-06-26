@@ -115,6 +115,85 @@ const updateSchedule = async (req, res) => {
         }
 
         // ─────────────────────────────────────────────────────────────────────────
+        // RESTRICTION: Do not allow changing operative/helpers if daily expenses
+        // or client/site data (photos, report, drawing, data) already exist.
+        // ─────────────────────────────────────────────────────────────────────────
+        if (updates.operative !== undefined || updates.helpers !== undefined) {
+            const existingSchedule = await ScheduleMaster.findById(id);
+            if (existingSchedule) {
+                let operativeChanged = false;
+                if (updates.operative !== undefined) {
+                    const currentOperativeId = existingSchedule.operative ? String(existingSchedule.operative) : null;
+                    const newOperativeId = updates.operative ? String(updates.operative) : null;
+                    if (currentOperativeId !== newOperativeId) {
+                        operativeChanged = true;
+                    }
+                }
+
+                let helpersChanged = false;
+                if (updates.helpers !== undefined) {
+                    const currentHelperIds = (existingSchedule.helpers || []).map(h => String(h)).sort().join(',');
+                    const newHelperIds = (updates.helpers || []).map(h => String(h)).sort().join(',');
+                    if (currentHelperIds !== newHelperIds) {
+                        helpersChanged = true;
+                    }
+                }
+
+                if (operativeChanged || helpersChanged) {
+                    const startOfDay = new Date(existingSchedule.scheduleDate);
+                    startOfDay.setUTCHours(0, 0, 0, 0);
+                    const endOfDay = new Date(startOfDay);
+                    endOfDay.setUTCDate(endOfDay.getUTCDate() + 1);
+
+                    const scheduleIdStr = String(existingSchedule._id);
+
+                    // Find any EmployeeExpense documents for the schedule's date that refer to this schedule ID
+                    const associatedExpenses = await EmployeeExpense.find({
+                        date: { $gte: startOfDay, $lt: endOfDay },
+                        "clientSites.scheduleId": existingSchedule._id
+                    });
+
+                    for (const exp of associatedExpenses) {
+                        const isRelated = (existingSchedule.operative && String(exp.employeeId) === String(existingSchedule.operative)) ||
+                                          (existingSchedule.helpers && existingSchedule.helpers.some(h => String(h) === String(exp.employeeId)));
+
+                        if (isRelated) {
+                            const cs = exp.clientSites.find(c => String(c.scheduleId) === scheduleIdStr);
+                            if (cs) {
+                                const hasFiles = cs.files && (
+                                    (cs.files.photos && cs.files.photos.length > 0) ||
+                                    (cs.files.dailyReports && cs.files.dailyReports.length > 0) ||
+                                    (cs.files.data && cs.files.data.length > 0) ||
+                                    (cs.files.drawing && cs.files.drawing.length > 0)
+                                );
+
+                                const hasExpenses = (
+                                    (Number(exp.expenses?.breakfast) || 0) > 0 ||
+                                    (Number(exp.expenses?.lunch) || 0) > 0 ||
+                                    (Number(exp.expenses?.dinner) || 0) > 0 ||
+                                    (Number(exp.expenses?.petrol) || 0) > 0 ||
+                                    (exp.otherExpensesList && exp.otherExpensesList.length > 0) ||
+                                    (cs.allocatedExpense > 0) ||
+                                    (cs.allocatedCredit > 0) ||
+                                    (exp.photos && exp.photos.length > 0) ||
+                                    (exp.dataFiles && exp.dataFiles.length > 0) ||
+                                    (exp.dailyReports && exp.dailyReports.length > 0)
+                                );
+
+                                if (hasFiles || hasExpenses) {
+                                    return res.status(400).json({
+                                        success: false,
+                                        message: 'Cannot update operative or helpers because this schedule already contains daily expenses or client/site data (photos, report, drawing, data). Please delete those entries first.'
+                                    });
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+
+        // ─────────────────────────────────────────────────────────────────────────
         // AUTOMATIC EXPENSE & DOCUMENT TRANSFER WHEN OPERATIVE IS CHANGED
         // ─────────────────────────────────────────────────────────────────────────
         if ('operative' in updates) {

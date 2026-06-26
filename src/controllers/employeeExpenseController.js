@@ -214,6 +214,15 @@ exports.adminAddExpense = async (req, res) => {
                 }
             }
 
+            // Calculate Option B splits for debits (totalExpense) and credits (totalReceived)
+            const siteCount = existingExpense.clientSites.length;
+            const splitExpense = siteCount > 0 ? (totalExpense / siteCount) : 0;
+            const splitCredit = siteCount > 0 ? (totalReceived / siteCount) : 0;
+            existingExpense.clientSites.forEach(cs => {
+                cs.allocatedExpense = splitExpense;
+                cs.allocatedCredit = splitCredit;
+            });
+
             // Overwrite expenses (Breakfast, Lunch, Dinner, Petrol)
             existingExpense.expenses = parsedExpenses;
             if (fuelType) {
@@ -273,6 +282,15 @@ exports.adminAddExpense = async (req, res) => {
                 { $inc: { totalAmount: -netImpact } },
                 { new: true, session }
             );
+
+            // Calculate Option B splits for debits (totalExpense) and credits (totalReceived)
+            const siteCount = parsedClientSites.length;
+            const splitExpense = siteCount > 0 ? (totalExpense / siteCount) : 0;
+            const splitCredit = siteCount > 0 ? (totalReceived / siteCount) : 0;
+            parsedClientSites.forEach(cs => {
+                cs.allocatedExpense = splitExpense;
+                cs.allocatedCredit = splitCredit;
+            });
 
             const newExpense = new EmployeeExpense({
                 employeeId,
@@ -509,7 +527,15 @@ exports.addExpense = async (req, res) => {
         );
 
         // 3. Save Expense Record
-        const clientSites = (siteIds || []).map(sid => ({ siteId: sid }));
+        const siteCount = (siteIds || []).length;
+        const splitExpense = siteCount > 0 ? (totalExpense / siteCount) : 0;
+        const splitCredit = siteCount > 0 ? (totalReceived / siteCount) : 0;
+
+        const clientSites = (siteIds || []).map(sid => ({ 
+            siteId: sid,
+            allocatedExpense: splitExpense,
+            allocatedCredit: splitCredit
+        }));
         
         const newExpense = new EmployeeExpense({
             employeeId,
