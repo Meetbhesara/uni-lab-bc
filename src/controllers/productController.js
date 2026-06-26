@@ -45,15 +45,19 @@ const saveLocalFile = (file, subfolder) => {
         }
     }
     
-    return `/api/uploads/products/${subfolder}/${fileName}`;
+    return `/uploads/products/${subfolder}/${fileName}`;
 };
 
 const removeLocalFile = (relativePath) => {
     if (!relativePath || relativePath.startsWith('http')) return;
     try {
-        const parts = relativePath.split('/api/uploads/products/');
-        if (parts.length === 2) {
-            const filePath = path.join(productsUploadPath, parts[1]);
+        // Support both old paths (/api/uploads/products/...) and new (/uploads/products/...)
+        let subPath = null;
+        if (relativePath.includes('/uploads/products/')) {
+            subPath = relativePath.split('/uploads/products/')[1];
+        }
+        if (subPath) {
+            const filePath = path.join(productsUploadPath, subPath);
             if (fs.existsSync(filePath)) {
                 fs.unlinkSync(filePath);
                 console.log(`🗑️ Deleted local file: ${filePath}`);

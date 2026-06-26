@@ -1,7 +1,7 @@
 const express = require('express');
 const router = express.Router();
 const auth = require('../middlewares/auth');
-const { register, login, phoneLogin, phoneRegister, getUserByPhone, sendOtp, verifyOtp, sendAdminOtp, verifyAdminOtp, createAdmin, getAdmins, updateAdminPermissions, setup2FA, verifyAndEnable2FA, loginWith2FA, resetWithBackupCode, getMe } = require('../controllers/authController');
+const { register, login, phoneLogin, phoneRegister, getUserByPhone, sendOtp, verifyOtp, sendAdminOtp, verifyAdminOtp, createAdmin, getAdmins, updateAdminPermissions, setup2FA, verifyAndEnable2FA, loginWith2FA, resetWithBackupCode, getMe, getUsers } = require('../controllers/authController');
 
 router.get('/me', auth, getMe);
 
@@ -19,6 +19,7 @@ router.post('/verify-admin-otp', verifyAdminOtp);
 router.post('/create-admin', createAdmin);
 router.get('/admins', getAdmins);
 router.patch('/admins/:id/permissions', updateAdminPermissions);
+router.get('/users', getUsers);
 // MFA / TOTP Routes
 router.post('/setup-2fa', setup2FA);
 router.post('/verify-enable-2fa', verifyAndEnable2FA);

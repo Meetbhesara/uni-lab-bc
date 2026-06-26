@@ -490,6 +490,19 @@ const getAdmins = async (req, res) => {
     }
 };
 
+// GET all regular users (non-admin, non-superadmin)
+const getUsers = async (req, res) => {
+    try {
+        const users = await User.find({ isAdmin: false, isSuperAdmin: false })
+            .select('-password -twoFactorSecret -backupCodes -otp -otpExpires')
+            .sort({ createdAt: -1 });
+        res.json({ users, total: users.length });
+    } catch (err) {
+        console.error(err.message);
+        res.status(500).send('Server Error');
+    }
+};
+
 const updateAdminPermissions = async (req, res) => {
     try {
         const { permissions } = req.body;
@@ -505,4 +518,5 @@ const updateAdminPermissions = async (req, res) => {
     }
 };
 
-module.exports = { register, login, phoneLogin, phoneRegister, getUserByPhone, sendOtp, verifyOtp, sendAdminOtp, verifyAdminOtp, createAdmin, setup2FA, verifyAndEnable2FA, loginWith2FA, resetWithBackupCode, getAdmins, updateAdminPermissions, getMe };
+module.exports = { register, login, phoneLogin, phoneRegister, getUserByPhone, sendOtp, verifyOtp, sendAdminOtp, verifyAdminOtp, createAdmin, setup2FA, verifyAndEnable2FA, loginWith2FA, resetWithBackupCode, getAdmins, updateAdminPermissions, getMe, getUsers };
+
