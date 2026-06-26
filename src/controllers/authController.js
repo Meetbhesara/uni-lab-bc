@@ -493,7 +493,7 @@ const getAdmins = async (req, res) => {
 // GET all regular users (non-admin, non-superadmin)
 const getUsers = async (req, res) => {
     try {
-        const users = await User.find({ isAdmin: false, isSuperAdmin: false })
+        const users = await User.find({ isAdmin: { $ne: true }, isSuperAdmin: { $ne: true } })
             .select('-password -twoFactorSecret -backupCodes -otp -otpExpires')
             .sort({ createdAt: -1 });
         res.json({ users, total: users.length });
