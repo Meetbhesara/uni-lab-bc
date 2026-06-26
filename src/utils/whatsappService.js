@@ -14,28 +14,38 @@ if (!fs.existsSync(whatsappAuthPath)) {
     fs.mkdirSync(whatsappAuthPath, { recursive: true });
 }
 
-// ── Clean stale Chrome lock files ─────────────────────────────────────────────
-// When the Docker container restarts, Chrome leaves behind SingletonLock files
-// from the previous run. These prevent a new Chrome from starting (Code: 21).
-// This function deletes those lock files before every session initialization.
-const cleanChromeLock = (sessionId) => {
-    const LOCK_FILES = ['SingletonLock', 'SingletonCookie', 'SingletonSocket'];
-    const profilePath = path.join(whatsappAuthPath, `session-${sessionId}`);
-    if (!fs.existsSync(profilePath)) return;
-    LOCK_FILES.forEach(lockFile => {
-        const lockPath = path.join(profilePath, lockFile);
-        if (fs.existsSync(lockPath)) {
+// ── Clean stale Chrome lock files (RECURSIVE) ───────────────────────────────
+// Chrome leaves SingletonLock files when a Docker container is killed/restarted.
+// These locks are stored inside nested subdirectories of the Chrome profile.
+// We recursively walk the entire session folder to find and delete them all.
+const LOCK_FILES = ['SingletonLock', 'SingletonCookie', 'SingletonSocket'];
+
+const deleteLockFilesIn = (dir) => {
+    if (!fs.existsSync(dir)) return;
+    let entries;
+    try { entries = fs.readdirSync(dir, { withFileTypes: true }); } catch { return; }
+    entries.forEach(entry => {
+        const fullPath = path.join(dir, entry.name);
+        if (entry.isDirectory()) {
+            deleteLockFilesIn(fullPath); // recurse into subdirectories
+        } else if (LOCK_FILES.includes(entry.name)) {
             try {
-                fs.unlinkSync(lockPath);
-                console.log(`[WhatsApp] 🧹 Removed stale lock file: ${lockFile} (session: ${sessionId})`);
-                logToFile(`Removed stale Chrome lock: ${lockFile}`, { sessionId });
+                fs.unlinkSync(fullPath);
+                console.log(`[WhatsApp] 🧹 Deleted lock: ${fullPath}`);
             } catch (err) {
-                console.warn(`[WhatsApp] Could not remove lock file ${lockFile}:`, err.message);
+                console.warn(`[WhatsApp] ⚠️ Could not delete lock ${fullPath}:`, err.message);
             }
         }
     });
 };
-// ─────────────────────────────────────────────────────────────────────────────
+
+const cleanChromeLock = (sessionId) => {
+    // Chrome can store the lock directly in the session folder OR inside Default/, Profile 1/, etc.
+    const sessionPath = path.join(whatsappAuthPath, `session-${sessionId}`);
+    console.log(`[WhatsApp] 🧹 Scanning for stale Chrome locks in: ${sessionPath}`);
+    deleteLockFilesIn(sessionPath);
+};
+// ───────────────────────────────────────────────────────────────────
 
 // In-memory mappings
 const clients = new Map();
@@ -80,11 +90,13 @@ const initialize = (sessionId = 'system_default') => {
         puppeteer: {
             headless: true,
             args: [
-                '--no-sandbox', 
+                '--no-sandbox',
                 '--disable-setuid-sandbox',
                 '--disable-dev-shm-usage',
                 '--disable-gpu',
                 '--no-zygote',
+                '--ignore-profile-dir-locked',   // ← force-ignore stale lock files
+                '--disable-features=IsolateOrigins,site-per-process',
                 '--user-agent=Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36'
             ]
         },
