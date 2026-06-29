@@ -312,7 +312,57 @@ const sendWhatsappMedia = async (phone, fileUrl, caption, adminId = null) => {
         const isPdf = fileUrl.toLowerCase().includes('.pdf');
         let media;
 
-        if (fileUrl.startsWith('http://') || fileUrl.startsWith('https://')) {
+        // 1. Try to resolve the URL locally (handles NAS vs Local paths)
+        let localPath = null;
+        if (fileUrl) {
+            let relativePath = fileUrl;
+            if (fileUrl.startsWith('http://') || fileUrl.startsWith('https://')) {
+                try {
+                    const urlObj = new URL(fileUrl);
+                    relativePath = urlObj.pathname;
+                } catch (e) {
+                    console.error('[WhatsApp] Failed to parse URL:', fileUrl);
+                }
+            }
+
+            if (relativePath.includes('/uploads/')) {
+                const useNas = process.env.USE_NAS === 'true';
+                const nasRoot = process.env.NAS_BASE_PATH || '/app/storage';
+                const localRoot = process.env.LOCAL_BASE_PATH || './uploads';
+                const subPath = relativePath.split('/uploads/')[1];
+
+                if (useNas) {
+                    if (subPath.startsWith('products/') || 
+                        subPath.startsWith('vehicle_master/') || 
+                        subPath.startsWith('employee_master/') || 
+                        subPath.startsWith('client_master/') || 
+                        subPath.startsWith('site_master/') || 
+                        subPath.startsWith('instrument_master/')) {
+                        localPath = path.join(nasRoot, subPath);
+                    } else {
+                        localPath = path.join(process.cwd(), 'uploads', subPath);
+                    }
+                } else {
+                    const baseDir = path.isAbsolute(localRoot) ? localRoot : path.join(process.cwd(), localRoot);
+                    if (subPath.startsWith('products/') || 
+                        subPath.startsWith('vehicle_master/') || 
+                        subPath.startsWith('employee_master/') || 
+                        subPath.startsWith('client_master/') || 
+                        subPath.startsWith('site_master/') || 
+                        subPath.startsWith('instrument_master/')) {
+                        localPath = path.join(baseDir, subPath);
+                    } else {
+                        localPath = path.join(process.cwd(), 'uploads', subPath);
+                    }
+                }
+            }
+        }
+
+        // 2. Load the media (prioritize direct filesystem access to bypass network loopback issues)
+        if (localPath && fs.existsSync(localPath)) {
+            console.log(`[WhatsApp] Resolving media locally from path: ${localPath}`);
+            media = MessageMedia.fromFilePath(localPath);
+        } else if (fileUrl.startsWith('http://') || fileUrl.startsWith('https://')) {
             media = await MessageMedia.fromUrl(fileUrl);
         } else {
             let cleanedPath = fileUrl;
