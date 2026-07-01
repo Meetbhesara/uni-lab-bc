@@ -458,7 +458,7 @@ const getEmployeeById = async (req, res) => {
 const updateMonthlyPayment = async (req, res) => {
     try {
         const _id = req.params.id;
-        const { month, paymentMode, paymentStatus } = req.body;
+        const { month, paymentMode, paymentStatus, presentDays, absentDays, upad } = req.body;
         
         if (!month) return res.status(400).json({ success: false, message: 'Month is required' });
 
@@ -469,14 +469,74 @@ const updateMonthlyPayment = async (req, res) => {
         if (paymentIndex > -1) {
             if (paymentMode !== undefined) employee.monthlyPayments[paymentIndex].paymentMode = paymentMode;
             if (paymentStatus !== undefined) employee.monthlyPayments[paymentIndex].paymentStatus = paymentStatus;
+            if (presentDays !== undefined) employee.monthlyPayments[paymentIndex].presentDays = presentDays;
+            if (absentDays !== undefined) employee.monthlyPayments[paymentIndex].absentDays = absentDays;
+            if (upad !== undefined) employee.monthlyPayments[paymentIndex].upad = upad;
         } else {
-            employee.monthlyPayments.push({ month, paymentMode: paymentMode || 'Cash', paymentStatus: paymentStatus || 'Pending' });
+            employee.monthlyPayments.push({
+                month,
+                paymentMode: paymentMode || 'Cash',
+                paymentStatus: paymentStatus || 'Pending',
+                presentDays: presentDays ?? null,
+                absentDays: absentDays ?? null,
+                upad: upad ?? 0
+            });
         }
 
         await employee.save();
         res.json({ success: true, message: 'Monthly payment updated successfully', data: employee });
     } catch (error) {
         console.error('Error in updateMonthlyPayment:', error);
+        res.status(500).json({ success: false, message: error.message });
+    }
+};
+
+const getAttendanceSummary = async (req, res) => {
+    try {
+        const { id } = req.params;         // employee _id or empId
+        const { month } = req.query;        // YYYY-MM
+
+        if (!month) return res.status(400).json({ success: false, message: 'month query param required (YYYY-MM)' });
+
+        const [year, mon] = month.split('-').map(Number);
+        const startDate = new Date(year, mon - 1, 1);
+        const endDate   = new Date(year, mon, 1);   // exclusive
+
+        const EmployeeExpense = require('../models/EmployeeExpense');
+
+        // Support lookup by _id or by empId string
+        let employeeObjectId = null;
+        const mongoose = require('mongoose');
+        if (mongoose.Types.ObjectId.isValid(id)) {
+            employeeObjectId = new mongoose.Types.ObjectId(id);
+        } else {
+            const emp = await EmployeeMaster.findOne({ empId: id });
+            if (!emp) return res.status(404).json({ success: false, message: 'Employee not found' });
+            employeeObjectId = emp._id;
+        }
+
+        const records = await EmployeeExpense.find({
+            employeeId: employeeObjectId,
+            date: { $gte: startDate, $lt: endDate }
+        }).select('date attendance').lean();
+
+        let present = 0, absent = 0, halfDay = 0;
+        records.forEach(r => {
+            const att = r.attendance || 'Present';
+            if (att === 'Present') present++;
+            else if (att === 'Absent') absent++;
+            else if (att === 'Half Day') halfDay++;
+        });
+
+        // Count of calendar days with any record
+        const totalRecorded = records.length;
+
+        res.json({
+            success: true,
+            data: { present, absent, halfDay, totalRecorded, month }
+        });
+    } catch (error) {
+        console.error('Error in getAttendanceSummary:', error);
         res.status(500).json({ success: false, message: error.message });
     }
 };
@@ -488,5 +548,6 @@ module.exports = {
     getEmployeeById,
     getNextEmpId,
     deleteEmployeeMaster,
-    updateMonthlyPayment
+    updateMonthlyPayment,
+    getAttendanceSummary
 };

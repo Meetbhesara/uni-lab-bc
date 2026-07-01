@@ -2,6 +2,10 @@ const mongoose = require('mongoose');
 const EmployeeTransfer = require('../models/EmployeeTransfer');
 const EmployeeLedger = require('../models/EmployeeLedger');
 const EmployeeMaster = require('../models/EmployeeMaster');
+const { sendWhatsapp } = require('../utils/whatsappService');
+
+// Helper: pause between bulk messages to avoid WhatsApp rate-limiting
+const delay = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
 
 exports.createTransfer = async (req, res) => {
     const session = await mongoose.startSession();
@@ -57,6 +61,34 @@ exports.createTransfer = async (req, res) => {
 
         await session.commitTransaction();
         session.endSession();
+
+        // ── WhatsApp Notification to Receiver (Taker) ───────────────────────
+        // Fetch full details of giver & taker for the message
+        try {
+            const [giverDoc, takerDoc] = await Promise.all([
+                EmployeeMaster.findById(giver).select('name phone'),
+                EmployeeMaster.findById(taker).select('name phone')
+            ]);
+
+            if (takerDoc && takerDoc.phone) {
+                const formattedDate = new Date(date || new Date()).toLocaleDateString('en-IN', {
+                    day: '2-digit', month: 'short', year: 'numeric'
+                });
+                const msg =
+                    `💸 *Money Transfer Received!*\n\n` +
+                    `*Sender:* *${giverDoc?.name || 'Employee'}*\n` +
+                    `*Receiver:* *${takerDoc.name}*\n` +
+                    `*Amount:* *₹${Number(amount).toLocaleString('en-IN')}*\n` +
+                    `*Date:* ${formattedDate}`;
+
+                await sendWhatsapp(takerDoc.phone, msg, req.user?.id);
+            }
+        } catch (wpErr) {
+            // WhatsApp failure must NOT roll back the transfer
+            console.error('[Transfer] WhatsApp notification failed (non-critical):', wpErr.message);
+        }
+        // ────────────────────────────────────────────────────────────────────
+
         res.status(201).json({ success: true, message: 'Transfer recorded successfully', data: transfer });
     } catch (error) {
         await session.abortTransaction();
@@ -122,6 +154,45 @@ exports.bulkCreateTransfers = async (req, res) => {
 
         await session.commitTransaction();
         session.endSession();
+
+        // ── WhatsApp Notifications (sent after commit, one-by-one with delay) ──
+        // A 1.2-second gap between each message prevents WhatsApp from flagging
+        // the account as spam, even for 10-15 receivers in a single bulk action.
+        try {
+            for (const item of transfers) {
+                const { giver, taker, amount, date, notes } = item;
+                try {
+                    const [giverDoc, takerDoc] = await Promise.all([
+                        EmployeeMaster.findById(giver).select('name phone'),
+                        EmployeeMaster.findById(taker).select('name phone')
+                    ]);
+
+                    if (takerDoc && takerDoc.phone) {
+                        const formattedDate = new Date(date || new Date()).toLocaleDateString('en-IN', {
+                            day: '2-digit', month: 'short', year: 'numeric'
+                        });
+                        const msg =
+                            `💸 *Money Transfer Received!*\n\n` +
+                            `*Sender:* *${giverDoc?.name || 'Employee'}*\n` +
+                            `*Receiver:* *${takerDoc.name}*\n` +
+                            `*Amount:* *₹${Number(amount).toLocaleString('en-IN')}*\n` +
+                            `*Date:* ${formattedDate}` +
+                            `\n\n_This is an automated notification from Unique Engineering._`;
+
+                        await sendWhatsapp(takerDoc.phone, msg, req.user?.id);
+                        // Wait 1.2s before next message to avoid spam detection
+                        await delay(1200);
+                    }
+                } catch (individualErr) {
+                    console.error(`[BulkTransfer] WhatsApp failed for taker ${taker} (non-critical):`, individualErr.message);
+                    // Continue to next receiver even if one fails
+                }
+            }
+        } catch (wpErr) {
+            console.error('[BulkTransfer] WhatsApp loop error (non-critical):', wpErr.message);
+        }
+        // ────────────────────────────────────────────────────────────────────
+
         res.status(201).json({ success: true, message: 'Transfers recorded successfully' });
     } catch (error) {
         await session.abortTransaction();

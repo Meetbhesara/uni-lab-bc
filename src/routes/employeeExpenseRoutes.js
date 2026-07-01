@@ -5,6 +5,7 @@ const path = require('path');
 const fs = require('fs');
 const employeeExpenseController = require('../controllers/employeeExpenseController');
 const { employeeAuth } = require('../middlewares/employeeAuth');
+const auth = require('../middlewares/auth');
 
 // --- Multer Storage Logic (Reused for consistent folder structure) ---
 const storage = multer.diskStorage({
@@ -115,9 +116,12 @@ router.get('/all', employeeExpenseController.getAllExpenses);
 router.get('/admin/:employeeId', employeeExpenseController.getExpensesByEmployee);
 
 // Admin Add Expense with File Support (Using any() for dynamic site-wise fields)
-router.post('/admin/add-expense', upload.any(), employeeExpenseController.adminAddExpense);
+router.post('/admin/add-expense', auth, upload.any(), employeeExpenseController.adminAddExpense);
 
 router.delete('/:id', employeeExpenseController.deleteExpense);
+
+// Last 5 days summary — all employees
+router.get('/report/daily-summary', employeeExpenseController.getDailySummary);
 
 // Attendance routes for unscheduled employees
 router.get('/attendance', employeeExpenseController.getAttendanceByDate);

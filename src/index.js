@@ -5,7 +5,10 @@ const connectDB = require('./configs/db');
 const authRoutes = require('./routes/authRoutes');
 const cors = require('cors');
 app.use(cors());
-connectDB();
+connectDB().then(() => {
+    const { initializeScheduler } = require('./utils/attendanceScheduler');
+    initializeScheduler();
+});
 
 // Static middleware will be registered below after master paths are defined
 app.use(exprees.json({ extended: false }));

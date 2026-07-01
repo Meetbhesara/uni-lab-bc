@@ -3,7 +3,7 @@ const router = express.Router();
 const multer = require('multer');
 const path = require('path');
 const fs = require('fs');
-const { storeEmployeeMaster, updateEmployeeMaster, getEmployees, getNextEmpId, deleteEmployeeMaster, getEmployeeById, updateMonthlyPayment } = require('../controllers/employeeMasterController');
+const { storeEmployeeMaster, updateEmployeeMaster, getEmployees, getNextEmpId, deleteEmployeeMaster, getEmployeeById, updateMonthlyPayment, getAttendanceSummary } = require('../controllers/employeeMasterController');
 
 // Dynamic Storage Configuration
 const storage = multer.diskStorage({
@@ -74,6 +74,7 @@ router.put('/:id', upload.fields([
 
 router.get('/', getEmployees);
 router.delete('/:id', deleteEmployeeMaster);
+router.get('/:id/attendance-summary', getAttendanceSummary);
 router.put('/:id/monthly-payment', updateMonthlyPayment);
 
 module.exports = router;

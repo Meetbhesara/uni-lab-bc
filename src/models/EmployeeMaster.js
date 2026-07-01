@@ -108,7 +108,10 @@ const EmployeeMasterSchema = new mongoose.Schema({
         {
             month: { type: String, required: true },
             paymentMode: { type: String, enum: ['Cash', 'Cheque', 'UPI'], default: 'Cash' },
-            paymentStatus: { type: String, enum: ['Pending', 'Done'], default: 'Pending' }
+            paymentStatus: { type: String, enum: ['Pending', 'Done'], default: 'Pending' },
+            presentDays: { type: Number, default: null },
+            absentDays: { type: Number, default: null },
+            upad: { type: Number, default: 0 }
         }
     ],
     createdAt: {

@@ -1,7 +1,7 @@
 const express = require('express');
 const router = express.Router();
 const auth = require('../middlewares/auth');
-const { register, login, phoneLogin, phoneRegister, getUserByPhone, sendOtp, verifyOtp, sendAdminOtp, verifyAdminOtp, createAdmin, getAdmins, updateAdminPermissions, setup2FA, verifyAndEnable2FA, loginWith2FA, resetWithBackupCode, getMe, getUsers } = require('../controllers/authController');
+const { register, login, phoneLogin, phoneRegister, getUserByPhone, sendOtp, verifyOtp, sendAdminOtp, verifyAdminOtp, createAdmin, getAdmins, updateAdminPermissions, setup2FA, verifyAndEnable2FA, loginWith2FA, resetWithBackupCode, getMe, getUsers, getGeofenceSettings, updateGeofenceSettings, getAdminLoginReport } = require('../controllers/authController');
 
 router.get('/me', auth, getMe);
 
@@ -25,5 +25,12 @@ router.post('/setup-2fa', setup2FA);
 router.post('/verify-enable-2fa', verifyAndEnable2FA);
 router.post('/login-2fa', loginWith2FA);
 router.post('/reset-with-backup', resetWithBackupCode);
+
+// Geofence boundaries
+router.get('/geofence', auth, getGeofenceSettings);
+router.post('/geofence', auth, updateGeofenceSettings);
+
+// Admin Login Attendance Report
+router.get('/admin-login-report', auth, getAdminLoginReport);
 
 module.exports = router;

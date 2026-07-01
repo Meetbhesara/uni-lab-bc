@@ -2,6 +2,7 @@ const mongoose = require('mongoose');
 const EmployeeExpense = require('../models/EmployeeExpense');
 const EmployeeMaster = require('../models/EmployeeMaster');
 const EmployeeLedger = require('../models/EmployeeLedger');
+const { sendWhatsapp } = require('../utils/whatsappService');
 
 exports.adminAddExpense = async (req, res) => {
     const session = await mongoose.startSession();
@@ -415,6 +416,63 @@ exports.adminAddExpense = async (req, res) => {
         await session.commitTransaction();
         session.endSession();
 
+        // ── WhatsApp Notification to Employee after Expense Submission ───────────
+        try {
+            const empDoc = await EmployeeMaster.findById(employeeId).select('name phone foodAllowance');
+
+            if (empDoc && empDoc.phone) {
+                const formattedDate = new Date(date || new Date()).toLocaleDateString('en-IN', {
+                    day: '2-digit', month: 'short', year: 'numeric'
+                });
+
+                const hasFood = empDoc.foodAllowance !== 'Without Food';
+                const exp     = parsedExpenses;
+                const fuel    = Number(exp.petrol) || 0;
+
+                // Build expense lines based on food allowance
+                let expenseLines = '';
+
+                if (hasFood) {
+                    // ✔ Food allowed: show Breakfast, Lunch, Dinner, Fuel
+                    const breakfast = Number(exp.breakfast) || 0;
+                    const lunch     = Number(exp.lunch)     || 0;
+                    const dinner    = Number(exp.dinner)    || 0;
+
+                    if (breakfast > 0) expenseLines += `  • *Breakfast:* ₹${breakfast.toLocaleString('en-IN')}\n`;
+                    if (lunch     > 0) expenseLines += `  • *Lunch:* ₹${lunch.toLocaleString('en-IN')}\n`;
+                    if (dinner    > 0) expenseLines += `  • *Dinner:* ₹${dinner.toLocaleString('en-IN')}\n`;
+                    if (fuel      > 0) expenseLines += `  • *Fuel:* ₹${fuel.toLocaleString('en-IN')}\n`;
+                } else {
+                    // ✔ Without Food: show only Fuel
+                    if (fuel > 0) expenseLines += `  • *Fuel:* ₹${fuel.toLocaleString('en-IN')}\n`;
+                }
+
+                // Other Expenses (shown for both food/without-food)
+                if (parsedOtherExpenses && parsedOtherExpenses.length > 0) {
+                    parsedOtherExpenses.forEach(item => {
+                        const amt = Number(item.amount) || 0;
+                        if (amt > 0 && item.name) {
+                            expenseLines += `  • *${item.name}:* ₹${amt.toLocaleString('en-IN')}\n`;
+                        }
+                    });
+                }
+
+                const msg =
+                    `📝 *Daily Expense Submitted*\n\n` +
+                    `*Employee:* *${empDoc.name}*\n` +
+                    `*Date:* ${formattedDate}\n` +
+                    `*Attendance:* ${attendance || 'Present'}\n\n` +
+                    (expenseLines ? `*Expense Breakdown:*\n${expenseLines}\n` : '') +
+                    `*Total Expense:* *₹${Number(totalExpense).toLocaleString('en-IN')}*`;
+
+                await sendWhatsapp(empDoc.phone, msg, req.user?.id);
+            }
+        } catch (wpErr) {
+            // WhatsApp failure must NOT affect the expense submission
+            console.error('[DailyExpense] WhatsApp notification failed (non-critical):', wpErr.message);
+        }
+        // ────────────────────────────────────────────────────────────────────
+
         res.status(201).json({ 
             success: true, 
             message: existingExpense ? 'Expense merged and balance updated' : 'Expense saved and balance updated', 
@@ -673,15 +731,155 @@ exports.getAttendanceByDate = async (req, res) => {
             attendance: { $exists: true }
         }).select('employeeId attendance attendanceRemark');
 
-        const data = records.map(r => ({
-            employeeId: String(r.employeeId),
-            attendance: r.attendance,
-            attendanceRemark: r.attendanceRemark || ''
-        }));
+        const data = records.map(r => {
+            const rawRemark = r.attendanceRemark || '';
+            const cleanRemark = rawRemark.toLowerCase().includes('auto-marked') || rawRemark.toLowerCase().includes('auto marked') ? '' : rawRemark;
+            return {
+                employeeId: String(r.employeeId),
+                attendance: r.attendance,
+                attendanceRemark: cleanRemark
+            };
+        });
 
         res.json({ success: true, data });
     } catch (error) {
         console.error('getAttendanceByDate Error:', error);
+        res.status(500).json({ success: false, message: error.message });
+    }
+};
+
+// ── POST: Bulk upsert attendance for unscheduled employees (no money touched) ──
+exports.getDailySummary = async (req, res) => {
+    try {
+        // Last 5 calendar days (today inclusive)
+        const today = new Date();
+        today.setHours(23, 59, 59, 999);
+        const fiveDaysAgo = new Date();
+        fiveDaysAgo.setDate(fiveDaysAgo.getDate() - 4);
+        fiveDaysAgo.setHours(0, 0, 0, 0);
+
+        const expenses = await EmployeeExpense.find({
+            date: { $gte: fiveDaysAgo, $lte: today }
+        })
+            .populate('employeeId', 'name totalAmount foodAllowance')
+            .populate('clientSites.clientId', 'clientName')
+            .populate('clientSites.siteId', 'siteName')
+            .sort({ 'employeeId': 1, date: -1 })
+            .lean();
+
+        // Also fetch ledger entries for the same period (credit & debit)
+        const EmployeeLedger = require('../models/EmployeeLedger');
+        const ledgers = await EmployeeLedger.find({
+            date: { $gte: fiveDaysAgo, $lte: today }
+        })
+            .populate('employee', 'name')
+            .populate('relatedEmployee', 'name')
+            .sort({ date: -1 })
+            .lean();
+
+        // Group expenses by employee
+        const empMap = {};
+        expenses.forEach(exp => {
+            const empId = String(exp.employeeId?._id || exp.employeeId);
+            const empName = exp.employeeId?.name || 'Unknown';
+            if (!empMap[empId]) {
+                empMap[empId] = { empId, empName, entries: [] };
+            }
+            // Get site names
+            const siteNames = (exp.clientSites || [])
+                .map(cs => cs.siteId?.siteName || cs.siteId || '')
+                .filter(Boolean)
+                .join(', ');
+
+            // Sum credit/debit from ledger for this expense's referenceId
+            const expLedgers = ledgers.filter(l => String(l.referenceId) === String(exp._id));
+            const totalDebit = expLedgers.filter(l => l.type === 'Debit').reduce((s, l) => s + l.amount, 0);
+            const totalCredit = expLedgers.filter(l => l.type === 'Credit').reduce((s, l) => s + l.amount, 0);
+
+            const rawRemark = exp.attendanceRemark || '';
+            const cleanRemark = rawRemark.toLowerCase().includes('auto-marked') || rawRemark.toLowerCase().includes('auto marked') ? '' : rawRemark;
+
+            empMap[empId].entries.push({
+                date: exp.date,
+                attendance: exp.attendance || 'Present',
+                attendanceRemark: cleanRemark,
+                siteNames,
+                totalExpense: exp.totalExpense || 0,
+                totalDebit,
+                totalCredit,
+                category: 'Expense'
+            });
+        });
+
+        // Inject Transfer ledger entries that don't belong to any expense
+        const expenseRefIds = new Set(expenses.map(e => String(e._id)));
+        ledgers.forEach(l => {
+            if (l.category === 'Transfer' && !expenseRefIds.has(String(l.referenceId))) {
+                const empId = String(l.employee?._id || l.employee);
+                const empName = l.employee?.name || 'Unknown';
+                if (!empMap[empId]) {
+                    empMap[empId] = { empId, empName, entries: [] };
+                }
+                // Avoid duplicate entries for same referenceId in same employee
+                const alreadyIn = empMap[empId].entries.some(e =>
+                    String(e.referenceId) === String(l.referenceId) && e.category === 'Transfer' && e.type === l.type
+                );
+                if (!alreadyIn) {
+                    empMap[empId].entries.push({
+                        date: l.date,
+                        attendance: '-',
+                        siteNames: l.relatedEmployee?.name ? `↔ ${l.relatedEmployee.name}` : '',
+                        totalExpense: 0,
+                        totalDebit: l.type === 'Debit' ? l.amount : 0,
+                        totalCredit: l.type === 'Credit' ? l.amount : 0,
+                        category: 'Transfer',
+                        type: l.type,
+                        description: l.description,
+                        referenceId: l.referenceId
+                    });
+                }
+            }
+        });
+
+        // Consolidate entries by date so there are no duplicate dates per employee
+        const result = Object.values(empMap).map(emp => {
+            const dateGrouped = {};
+            emp.entries.forEach(entry => {
+                const dateKey = new Date(entry.date).toISOString().split('T')[0];
+                if (!dateGrouped[dateKey]) {
+                    dateGrouped[dateKey] = { ...entry };
+                } else {
+                    const existing = dateGrouped[dateKey];
+                    existing.totalDebit = (existing.totalDebit || 0) + (entry.totalDebit || 0);
+                    existing.totalCredit = (existing.totalCredit || 0) + (entry.totalCredit || 0);
+                    existing.totalExpense = (existing.totalExpense || 0) + (entry.totalExpense || 0);
+
+                    if ((!existing.attendance || existing.attendance === '-') && entry.attendance && entry.attendance !== '-') {
+                        existing.attendance = entry.attendance;
+                    }
+                    if (entry.siteNames && !existing.siteNames.includes(entry.siteNames)) {
+                        existing.siteNames = existing.siteNames ? `${existing.siteNames} | ${entry.siteNames}` : entry.siteNames;
+                    }
+                    if (entry.attendanceRemark && !existing.attendanceRemark.includes(entry.attendanceRemark)) {
+                        existing.attendanceRemark = existing.attendanceRemark ? `${existing.attendanceRemark} | ${entry.attendanceRemark}` : entry.attendanceRemark;
+                    }
+                    if (existing.category !== entry.category) {
+                        existing.category = 'Combined';
+                    }
+                }
+            });
+
+            return {
+                ...emp,
+                entries: Object.values(dateGrouped)
+                    .sort((a, b) => new Date(b.date) - new Date(a.date))
+                    .slice(0, 5)
+            };
+        }).sort((a, b) => a.empName.localeCompare(b.empName));
+
+        res.json({ success: true, data: result });
+    } catch (error) {
+        console.error('getDailySummary Error:', error);
         res.status(500).json({ success: false, message: error.message });
     }
 };
