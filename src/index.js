@@ -4,14 +4,14 @@ const app = exprees();
 const connectDB = require('./configs/db');
 const authRoutes = require('./routes/authRoutes');
 const cors = require('cors');
-app.use(cors());
-connectDB().then(() => {
-    const { initializeScheduler } = require('./utils/attendanceScheduler');
-    initializeScheduler();
-});
 
-// Static middleware will be registered below after master paths are defined
+app.use(cors());
 app.use(exprees.json({ extended: false }));
+
+connectDB().then(() => {
+    const { autoGenerateMonthSchedules } = require('./utils/monthScheduleGenerator');
+    autoGenerateMonthSchedules();
+});
 
 const productRoutes = require('./routes/productRoutes');
 const cartRoutes = require('./routes/cartRoutes');

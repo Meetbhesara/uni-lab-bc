@@ -524,14 +524,10 @@ const getAttendanceSummary = async (req, res) => {
         const now = new Date();
         const effectiveEnd = endDate > now ? new Date(now.getFullYear(), now.getMonth(), now.getDate(), 23, 59, 59, 999) : endDate;
 
-        const schedules = await ScheduleMaster.find({
-            $or: [
-                { operative: employeeObjectId },
-                { helpers: employeeObjectId }
-            ],
+        const allSchedules = await ScheduleMaster.find({
             scheduleDate: { $gte: startDate, $lt: effectiveEnd },
             dayStatus: { $nin: ['Rejected', 'Skipped', 'Paused'] }
-        }).select('scheduleDate').lean();
+        }).select('scheduleDate operative helpers').lean();
 
         const attMap = {};
         records.forEach(r => {
@@ -541,12 +537,42 @@ const getAttendanceSummary = async (req, res) => {
             }
         });
 
-        // Whoever employee is scheduled, by default give Present if no explicit attendance record exists
-        schedules.forEach(s => {
+        // Determine working days (any day with at least one schedule) and check if employee was scheduled
+        const workingDays = new Set();
+        const employeeScheduledDays = new Set();
+
+        allSchedules.forEach(s => {
             if (s.scheduleDate) {
                 const dateStr = new Date(s.scheduleDate).toISOString().split('T')[0];
-                if (!attMap[dateStr]) {
-                    attMap[dateStr] = 'Present';
+                workingDays.add(dateStr);
+
+                const opId = s.operative?._id || s.operative;
+                const isOp = opId && String(opId) === String(employeeObjectId);
+                const isHelper = (s.helpers || []).some(h => {
+                    const hId = h?._id || h;
+                    return hId && String(hId) === String(employeeObjectId);
+                });
+
+                if (isOp || isHelper) {
+                    employeeScheduledDays.add(dateStr);
+                }
+            }
+        });
+
+        // Fallback defaults for working days without explicit attendance records:
+        // - If scheduled: Present if today, Absent if past
+        // - If unscheduled: Absent
+        const todayStr = new Date().toISOString().split('T')[0];
+        workingDays.forEach(dateStr => {
+            if (!attMap[dateStr]) {
+                if (employeeScheduledDays.has(dateStr)) {
+                    if (dateStr === todayStr) {
+                        attMap[dateStr] = 'Present';
+                    } else {
+                        attMap[dateStr] = 'Absent';
+                    }
+                } else {
+                    attMap[dateStr] = 'Absent';
                 }
             }
         });
