@@ -323,6 +323,39 @@ exports.adminAddExpense = async (req, res) => {
                 cs.allocatedCredit = splitCredit;
             });
 
+            let calculatedAttendance = attendance;
+            let calculatedRemark = attendanceRemark;
+
+            if (!calculatedAttendance) {
+                const ScheduleMaster = require('../models/ScheduleMaster');
+                const targetDate = date ? new Date(date) : new Date();
+                const startOfDay = new Date(targetDate.getFullYear(), targetDate.getMonth(), targetDate.getDate(), 0, 0, 0, 0);
+                const endOfDay = new Date(targetDate.getFullYear(), targetDate.getMonth(), targetDate.getDate(), 23, 59, 59, 999);
+
+                const daySchedules = await ScheduleMaster.find({
+                    $or: [
+                        { operative: employeeId },
+                        { helpers: employeeId }
+                    ],
+                    scheduleDate: { $gte: startOfDay, $lte: endOfDay },
+                    dayStatus: { $nin: ['Rejected'] }
+                });
+
+                if (daySchedules.length > 0) {
+                    const hasActive = daySchedules.some(s => s.dayStatus !== 'Skipped');
+                    if (hasActive) {
+                        calculatedAttendance = 'Present';
+                        calculatedRemark = '';
+                    } else {
+                        calculatedAttendance = 'Absent';
+                        calculatedRemark = 'Schedule was rejected or skipped';
+                    }
+                } else {
+                    calculatedAttendance = 'Present';
+                    calculatedRemark = 'Unscheduled Duty';
+                }
+            }
+
             const newExpense = new EmployeeExpense({
                 employeeId,
                 date: date || new Date(),
@@ -333,8 +366,8 @@ exports.adminAddExpense = async (req, res) => {
                 totalExpense,
                 remainingBalance: employee.totalAmount,
                 notes,
-                attendance: attendance || 'Present',
-                attendanceRemark,
+                attendance: calculatedAttendance,
+                attendanceRemark: calculatedRemark,
                 creditDebit: {
                     givenTo: parsedGivenTo,
                     receivedFrom: parsedReceivedFrom
@@ -645,6 +678,39 @@ exports.addExpense = async (req, res) => {
             allocatedCredit: splitCredit
         }));
         
+        let calculatedAttendance = attendance;
+        let calculatedRemark = attendanceRemark;
+
+        if (!calculatedAttendance) {
+            const ScheduleMaster = require('../models/ScheduleMaster');
+            const targetDate = date ? new Date(date) : new Date();
+            const startOfDay = new Date(targetDate.getFullYear(), targetDate.getMonth(), targetDate.getDate(), 0, 0, 0, 0);
+            const endOfDay = new Date(targetDate.getFullYear(), targetDate.getMonth(), targetDate.getDate(), 23, 59, 59, 999);
+
+            const daySchedules = await ScheduleMaster.find({
+                $or: [
+                    { operative: employeeId },
+                    { helpers: employeeId }
+                ],
+                scheduleDate: { $gte: startOfDay, $lte: endOfDay },
+                dayStatus: { $nin: ['Rejected'] }
+            });
+
+            if (daySchedules.length > 0) {
+                const hasActive = daySchedules.some(s => s.dayStatus !== 'Skipped');
+                if (hasActive) {
+                    calculatedAttendance = 'Present';
+                    calculatedRemark = '';
+                } else {
+                    calculatedAttendance = 'Absent';
+                    calculatedRemark = 'Schedule was rejected or skipped';
+                }
+            } else {
+                calculatedAttendance = 'Present';
+                calculatedRemark = 'Unscheduled Duty';
+            }
+        }
+
         const newExpense = new EmployeeExpense({
             employeeId,
             date: date || new Date(),
@@ -654,8 +720,8 @@ exports.addExpense = async (req, res) => {
             totalExpense,
             remainingBalance: employee.totalAmount,
             notes,
-            attendance: attendance || 'Present',
-            attendanceRemark,
+            attendance: calculatedAttendance,
+            attendanceRemark: calculatedRemark,
             creditDebit: {
                 givenTo,
                 receivedFrom
