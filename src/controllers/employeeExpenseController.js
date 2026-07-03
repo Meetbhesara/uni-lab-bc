@@ -3,6 +3,7 @@ const EmployeeExpense = require('../models/EmployeeExpense');
 const EmployeeMaster = require('../models/EmployeeMaster');
 const EmployeeLedger = require('../models/EmployeeLedger');
 const { sendWhatsapp } = require('../utils/whatsappService');
+const { broadcast } = require('../utils/sseManager');
 
 exports.adminAddExpense = async (req, res) => {
     const session = await mongoose.startSession();
@@ -351,7 +352,7 @@ exports.adminAddExpense = async (req, res) => {
                         calculatedRemark = 'Schedule was rejected or skipped';
                     }
                 } else {
-                    calculatedAttendance = 'Present';
+                    calculatedAttendance = 'Absent';
                     calculatedRemark = 'Unscheduled Duty';
                 }
             }
@@ -536,6 +537,7 @@ exports.adminAddExpense = async (req, res) => {
         }
         // ────────────────────────────────────────────────────────────────────
 
+        broadcast('expense-changed', { action: 'saved', employeeId });
         res.status(201).json({ 
             success: true, 
             message: existingExpense ? 'Expense merged and balance updated' : 'Expense saved and balance updated', 
@@ -577,6 +579,7 @@ exports.deleteExpense = async (req, res) => {
 
         await session.commitTransaction();
         session.endSession();
+        broadcast('expense-changed', { action: 'deleted', id });
         res.json({ success: true, message: 'Expense deleted and balance restored' });
     } catch (error) {
         await session.abortTransaction();
@@ -706,7 +709,7 @@ exports.addExpense = async (req, res) => {
                     calculatedRemark = 'Schedule was rejected or skipped';
                 }
             } else {
-                calculatedAttendance = 'Present';
+                calculatedAttendance = 'Absent';
                 calculatedRemark = 'Unscheduled Duty';
             }
         }
@@ -805,6 +808,7 @@ exports.addExpense = async (req, res) => {
 
         await session.commitTransaction();
         session.endSession();
+        broadcast('expense-changed', { action: 'saved', employeeId });
         res.status(201).json({ success: true, message: 'Expense saved successfully', data: newExpense });
     } catch (error) {
         await session.abortTransaction();
@@ -1108,6 +1112,7 @@ exports.bulkSaveAttendance = async (req, res) => {
             saved.push({ employeeId: String(updated.employeeId), attendance: updated.attendance, attendanceRemark: updated.attendanceRemark });
         }
 
+        broadcast('expense-changed', { action: 'attendance-bulk' });
         res.json({ success: true, message: `${saved.length} attendance record(s) saved`, data: saved });
     } catch (error) {
         console.error('bulkSaveAttendance Error:', error);

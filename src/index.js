@@ -30,6 +30,7 @@ const employeeTransferRoutes = require('./routes/employeeTransferRoutes');
 const employeeLedgerRoutes = require('./routes/employeeLedgerRoutes');
 const whatsappRoutes = require('./routes/whatsappRoutes');
 const draftingWorkRoutes = require('./routes/draftingWorkRoutes');
+const sseRoutes = require('./routes/sseRoutes');
 const path = require('path');
 const fs = require('fs');
 const { initializeAll: initializeWhatsapp } = require('./utils/whatsappService');
@@ -53,6 +54,7 @@ app.use('/api/employee-expense', employeeExpenseRoutes);
 app.use('/api/employee-transfer', employeeTransferRoutes);
 app.use('/api/employee-ledger', employeeLedgerRoutes);
 app.use('/api/drafts', draftingWorkRoutes);
+app.use('/api/events', sseRoutes);
 
 // Dynamically serve vehicle-master documents based on USE_NAS flag
 const useNasFlag = process.env.USE_NAS;

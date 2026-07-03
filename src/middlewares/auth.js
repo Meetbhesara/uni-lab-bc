@@ -1,8 +1,8 @@
 const jwt = require('jsonwebtoken');
 
 module.exports = function (req, res, next) {
-    // Get token from header
-    const tokenHeader = req.header('x-auth-token') || req.header('Authorization');
+    // Get token from header or query string (for SSE EventSource)
+    const tokenHeader = req.header('x-auth-token') || req.header('Authorization') || req.query.token;
 
     // Check if not token
     if (!tokenHeader) {
@@ -10,7 +10,7 @@ module.exports = function (req, res, next) {
     }
 
     let token = tokenHeader;
-    if (tokenHeader.startsWith('Bearer ')) {
+    if (typeof tokenHeader === 'string' && tokenHeader.startsWith('Bearer ')) {
         token = tokenHeader.slice(7, tokenHeader.length).trimLeft();
     }
 

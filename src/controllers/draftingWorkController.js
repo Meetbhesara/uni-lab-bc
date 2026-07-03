@@ -1,6 +1,7 @@
 const DraftingWork = require('../models/DraftingWork');
 const path = require('path');
 const fs = require('fs');
+const { broadcast } = require('../utils/sseManager');
 
 // Fetch all documents
 exports.getAllDrafts = async (req, res) => {
@@ -52,6 +53,7 @@ exports.uploadDraft = async (req, res) => {
             uploadedBy: req.user ? req.user.name : 'Admin'
         });
 
+        broadcast('drafting-changed', { action: 'created' });
         res.status(201).json({ success: true, data: draft });
     } catch (err) {
         res.status(500).json({ success: false, error: err.message });
@@ -86,6 +88,7 @@ exports.updateDraft = async (req, res) => {
         }
 
         await draft.save();
+        broadcast('drafting-changed', { action: 'updated' });
         res.status(200).json({ success: true, data: draft });
     } catch (err) {
         res.status(500).json({ success: false, error: err.message });
@@ -105,6 +108,7 @@ exports.deleteDraft = async (req, res) => {
         }
 
         await draft.deleteOne();
+        broadcast('drafting-changed', { action: 'deleted' });
         res.status(200).json({ success: true, data: {} });
     } catch (err) {
         res.status(500).json({ success: false, error: err.message });

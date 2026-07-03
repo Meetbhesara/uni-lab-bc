@@ -1,5 +1,6 @@
 const VehicleMaster = require('../models/VehicleMaster');
 const path = require('path');
+const { broadcast } = require('../utils/sseManager');
 
 const storeVehicleMaster = async (req, res) => {
     try {
@@ -51,6 +52,7 @@ const storeVehicleMaster = async (req, res) => {
             documents
         });
         await record.save();
+        broadcast('vehicle-changed', { action: 'created' });
         res.status(201).json({ success: true, message: 'Saved successfully', data: record });
     } catch (error) {
         console.error('Error in storeVehicleMaster:', error);
@@ -113,6 +115,7 @@ const updateVehicleMaster = async (req, res) => {
         }
 
         await record.save();
+        broadcast('vehicle-changed', { action: 'updated' });
         res.json({ success: true, message: 'Updated successfully', data: record });
     } catch (error) {
         res.status(500).json({ success: false, message: error.message });
@@ -124,9 +127,7 @@ const deleteVehicleMaster = async (req, res) => {
         const _id = req.params.id;
         const record = await VehicleMaster.findByIdAndDelete(_id);
         if (!record) return res.status(404).json({ success: false, message: 'Vehicle not found' });
-
-        // Logical deletion of files could be added here if needed
-
+        broadcast('vehicle-changed', { action: 'deleted' });
         res.json({ success: true, message: 'Vehicle deleted successfully' });
     } catch (error) {
         res.status(500).json({ success: false, message: error.message });

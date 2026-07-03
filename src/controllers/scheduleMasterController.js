@@ -4,6 +4,7 @@ const ClientMaster = require('../models/ClientMaster');
 const EmployeeExpense = require('../models/EmployeeExpense');
 const mongoose = require('mongoose');
 const path = require('path');
+const { broadcast } = require('../utils/sseManager');
 
 // POST - Create a new schedule
 const createSchedule = async (req, res) => {
@@ -80,6 +81,7 @@ const createSchedule = async (req, res) => {
             .populate('vehicle', 'vehicleNumber vehicleName')
             .populate('instruments', 'instrumentName serialNo model');
 
+        broadcast('schedule-changed', { action: 'created', id: schedule._id });
         res.status(201).json({ success: true, message: 'Schedule created successfully', data: populated });
     } catch (error) {
         console.error('Error in createSchedule:', error);
@@ -388,6 +390,7 @@ const updateSchedule = async (req, res) => {
             await ScheduleMaster.findByIdAndUpdate(schedule._id, { $set: { dayStatus: 'Skipped' } });
         }
 
+        broadcast('schedule-changed', { action: 'updated', id: schedule._id });
         res.json({ success: true, message: 'Schedule updated successfully', data: schedule });
     } catch (error) {
         console.error('Error in updateSchedule:', error);
@@ -672,6 +675,7 @@ const completeSchedule = async (req, res) => {
         schedule.dayStatus = 'Completed';
         await schedule.save({ validateBeforeSave: false });
 
+        broadcast('schedule-changed', { action: 'completed', id: schedule._id });
         res.json({
             success: true,
             message: 'Site visit marked as completed and documents stored',
@@ -694,6 +698,7 @@ const rejectSchedule = async (req, res) => {
         schedule.dayStatus = 'Rejected';
         await schedule.save({ validateBeforeSave: false });
 
+        broadcast('schedule-changed', { action: 'rejected', id: schedule._id });
         res.json({ success: true, message: 'Schedule marked as rejected', data: schedule });
     } catch (error) {
         console.error('Error in rejectSchedule:', error);

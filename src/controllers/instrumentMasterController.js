@@ -1,6 +1,7 @@
 const InstrumentMaster = require('../models/InstrumentMaster');
 const InstrumentGroup = require('../models/InstrumentGroup');
 const path = require('path');
+const { broadcast } = require('../utils/sseManager');
 
 const storeInstrumentMaster = async (req, res) => {
     try {
@@ -44,6 +45,7 @@ const storeInstrumentMaster = async (req, res) => {
         });
 
         await record.save();
+        broadcast('instrument-changed', { action: 'created' });
         res.status(201).json({
             success: true,
             message: 'Instrument record saved successfully',
@@ -134,6 +136,7 @@ const updateInstrumentMaster = async (req, res) => {
             { new: true, runValidators: true }
         );
 
+        broadcast('instrument-changed', { action: 'updated' });
         res.json({ success: true, message: 'Instrument updated successfully', data: updatedRecord });
     } catch (error) {
         console.error('Error in updateInstrumentMaster:', error);
@@ -153,6 +156,7 @@ const deleteInstrumentMaster = async (req, res) => {
         if (!record) {
             return res.status(404).json({ success: false, message: 'Instrument not found' });
         }
+        broadcast('instrument-changed', { action: 'deleted' });
         res.json({ success: true, message: 'Instrument deleted successfully' });
     } catch (error) {
         res.status(500).json({ success: false, message: error.message });
@@ -214,6 +218,7 @@ const createGroup = async (req, res) => {
         });
 
         await newGroup.save();
+        broadcast('instrument-changed', { action: 'group-created' });
         res.status(201).json({ success: true, message: 'Group created successfully', data: newGroup });
     } catch (error) {
         if (error.code === 11000) {
@@ -246,6 +251,7 @@ const updateGroup = async (req, res) => {
         if (instruments !== undefined) group.instruments = instruments;
 
         await group.save();
+        broadcast('instrument-changed', { action: 'group-updated' });
         res.json({ success: true, message: 'Group updated successfully', data: group });
     } catch (error) {
         if (error.code === 11000) {
@@ -261,6 +267,7 @@ const deleteGroup = async (req, res) => {
         if (!group) {
             return res.status(404).json({ success: false, message: 'Group not found' });
         }
+        broadcast('instrument-changed', { action: 'group-deleted' });
         res.json({ success: true, message: 'Group deleted successfully' });
     } catch (error) {
         res.status(500).json({ success: false, message: error.message });

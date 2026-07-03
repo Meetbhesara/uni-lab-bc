@@ -2,6 +2,7 @@ const ClientMaster = require('../models/ClientMaster');
 const Counter = require('../models/Counter');
 const path = require('path');
 const fs = require('fs');
+const { broadcast } = require('../utils/sseManager');
 
 const storeClientMaster = async (req, res) => {
     try {
@@ -96,6 +97,7 @@ const storeClientMaster = async (req, res) => {
         });
 
         await record.save();
+        broadcast('client-changed', { action: 'created' });
         res.status(201).json({ success: true, message: 'Client record stored successfully', data: record });
     } catch (error) {
         console.error('Error in storeClientMaster:', error);
@@ -202,6 +204,7 @@ const updateClientMaster = async (req, res) => {
         }
 
         await oldRecord.save();
+        broadcast('client-changed', { action: 'updated' });
         res.json({ success: true, message: 'Client updated successfully', data: oldRecord });
     } catch (error) {
         console.error('Error in updateClientMaster:', error);
@@ -249,6 +252,7 @@ const deleteClientMaster = async (req, res) => {
         }
 
         res.json({ success: true, message: 'Client deleted successfully' });
+        broadcast('client-changed', { action: 'deleted' });
     } catch (error) {
         res.status(500).json({ success: false, message: error.message });
     }

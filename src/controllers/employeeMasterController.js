@@ -4,6 +4,7 @@ const Counter = require('../models/Counter');
 const path = require('path');
 const fs = require('fs');
 const { sendWhatsapp } = require('../utils/whatsappService');
+const { broadcast } = require('../utils/sseManager');
 
 const sendEmployeeDetailsNotification = async (employee, isNew = true, adminId = null) => {
     try {
@@ -201,6 +202,7 @@ const storeEmployeeMaster = async (req, res) => {
         });
 
         await record.save();
+        broadcast('employee-changed', { action: 'created' });
         if (record.status === 'Active') {
             await sendEmployeeDetailsNotification(record, true, req.user?.id);
         } else {
@@ -396,6 +398,7 @@ const updateEmployeeMaster = async (req, res) => {
             console.log('Employee remains in Deactive state. Skipping WhatsApp notification.');
         }
 
+        broadcast('employee-changed', { action: 'updated' });
         res.json({ success: true, message: 'Employee updated successfully', data: oldRecord });
     } catch (error) {
         console.error('Error in updateEmployeeMaster:', error);
@@ -484,6 +487,7 @@ const updateMonthlyPayment = async (req, res) => {
         }
 
         await employee.save();
+        broadcast('employee-changed', { action: 'payment-updated' });
         res.json({ success: true, message: 'Monthly payment updated successfully', data: employee });
     } catch (error) {
         console.error('Error in updateMonthlyPayment:', error);
