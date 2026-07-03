@@ -147,7 +147,7 @@ const register = async (req, res) => {
     }
 
     try {
-        let user = await User.findOne({ email });
+        let user = await User.findByEmail(email);
         if (user) {
             return res.status(400).json({ msg: 'User already exists' });
         }
@@ -192,7 +192,7 @@ const login = async (req, res) => {
     }
 
     try {
-        const user = await User.findOne({ email });
+        const user = await User.findByEmail(email);
         if (!user) {
             return res.status(400).json({ msg: 'Invalid Credentials' });
         }
@@ -281,7 +281,7 @@ const phoneRegister = async (req, res) => {
 
         // --- NEW: Restrict Admin and Existing Emails ---
         if (email) {
-            const existingEmailUser = await User.findOne({ email: email.toLowerCase() });
+            const existingEmailUser = await User.findByEmail(email);
             if (existingEmailUser) {
                 if (existingEmailUser.isAdmin) {
                     return res.status(400).json({ msg: 'Admin emails cannot be used for client accounts' });
@@ -343,7 +343,7 @@ const sendOtp = async (req, res) => {
         if (phone) {
             user = await User.findOne({ phone: phone.toString() });
         } else if (email) {
-            user = await User.findOne({ email: email.toLowerCase() });
+            user = await User.findByEmail(email);
         }
 
         if (!user) return res.status(404).json({ msg: 'User not found. Please register.' });
@@ -380,7 +380,7 @@ const verifyOtp = async (req, res) => {
         if (phone) {
             user = await User.findOne({ phone: phone.toString() });
         } else if (email) {
-            user = await User.findOne({ email: email.toLowerCase() });
+            user = await User.findByEmail(email);
         }
 
         if (!user || user.otp !== otp || user.otpExpires < Date.now()) {
@@ -407,7 +407,7 @@ const sendAdminOtp = async (req, res) => {
     if (!email) return res.status(400).json({ msg: 'ADMIN_AUTH_ERROR: Missing email address' });
 
     try {
-        const user = await User.findOne({ email: email.toLowerCase() });
+        const user = await User.findByEmail(email);
         if (!user) return res.status(404).json({ msg: 'Admin account not found for this email' });
         if (!user.isAdmin) return res.status(401).json({ msg: 'Access Denied: This account is not an administrator' });
 
@@ -457,7 +457,7 @@ const verifyAdminOtp = async (req, res) => {
     if (!email || !otp) return res.status(400).json({ msg: 'ADMIN_AUTH_ERROR: Missing email or OTP code' });
 
     try {
-        const user = await User.findOne({ email: email.toLowerCase() });
+        const user = await User.findByEmail(email);
         if (!user || !user.isAdmin || user.otp !== otp || user.otpExpires < Date.now()) {
             return res.status(400).json({ msg: 'Invalid or expired Admin OTP. Please try again.' });
         }
@@ -493,7 +493,7 @@ const createAdmin = async (req, res) => {
     }
 
     try {
-        let user = await User.findOne({ email });
+        let user = await User.findByEmail(email);
         if (user) {
             return res.status(400).json({ msg: 'User already exists' });
         }
@@ -518,7 +518,7 @@ const createAdmin = async (req, res) => {
 const setup2FA = async (req, res) => {
     const { email } = req.body;
     try {
-        const user = await User.findOne({ email: email.toLowerCase() });
+        const user = await User.findByEmail(email);
         if (!user || !user.isAdmin) return res.status(404).json({ msg: 'Admin not found' });
 
         const secret = speakeasy.generateSecret({ name: `UniqueEngineeringAdmin:${user.email}` });
@@ -535,7 +535,7 @@ const setup2FA = async (req, res) => {
 const verifyAndEnable2FA = async (req, res) => {
     const { email, token } = req.body;
     try {
-        const user = await User.findOne({ email: email.toLowerCase() });
+        const user = await User.findByEmail(email);
         if (!user || !user.twoFactorSecret) return res.status(404).json({ msg: '2FA not initialized' });
 
         const verified = speakeasy.totp.verify({
@@ -559,7 +559,7 @@ const verifyAndEnable2FA = async (req, res) => {
 const loginWith2FA = async (req, res) => {
     const { email, token } = req.body;
     try {
-        const user = await User.findOne({ email: email.toLowerCase() });
+        const user = await User.findByEmail(email);
         if (!user || !user.isTwoFactorEnabled) return res.status(401).json({ msg: '2FA not enabled' });
 
         const verified = speakeasy.totp.verify({
@@ -609,7 +609,7 @@ const resetWithBackupCode = async (req, res) => {
 
         const MASTER_CODE = settings.value;
 
-        const user = await User.findOne({ email: email.toLowerCase() });
+        const user = await User.findByEmail(email);
         if (!user || !user.isAdmin) return res.status(404).json({ msg: 'Admin account not found.' });
 
         // Verify against DB Master Code

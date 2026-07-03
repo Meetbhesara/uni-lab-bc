@@ -6,6 +6,7 @@ const fs = require('fs');
 const employeeExpenseController = require('../controllers/employeeExpenseController');
 const { employeeAuth } = require('../middlewares/employeeAuth');
 const auth = require('../middlewares/auth');
+const checkPermission = require('../middlewares/checkPermission');
 
 // --- Multer Storage Logic (Reused for consistent folder structure) ---
 const storage = multer.diskStorage({
@@ -112,19 +113,19 @@ router.post('/', employeeAuth, employeeExpenseController.addExpense);
 router.get('/my-expenses', employeeAuth, employeeExpenseController.getExpensesForEmployee);
 
 // Admin / Management routes
-router.get('/all', employeeExpenseController.getAllExpenses);
-router.get('/admin/:employeeId', employeeExpenseController.getExpensesByEmployee);
+router.get('/all', auth, checkPermission('employeeExpense_report_advanced', 'read'), employeeExpenseController.getAllExpenses);
+router.get('/admin/:employeeId', auth, checkPermission('employeeExpense_report_advanced', 'read'), employeeExpenseController.getExpensesByEmployee);
 
 // Admin Add Expense with File Support (Using any() for dynamic site-wise fields)
-router.post('/admin/add-expense', auth, upload.any(), employeeExpenseController.adminAddExpense);
+router.post('/admin/add-expense', auth, checkPermission('employeeExpense_daily', 'write'), upload.any(), employeeExpenseController.adminAddExpense);
 
-router.delete('/:id', employeeExpenseController.deleteExpense);
+router.delete('/:id', auth, checkPermission('employeeExpense_daily', 'write'), employeeExpenseController.deleteExpense);
 
 // Last 5 days summary — all employees
-router.get('/report/daily-summary', employeeExpenseController.getDailySummary);
+router.get('/report/daily-summary', auth, checkPermission('employeeExpense_report_last5days', 'read'), employeeExpenseController.getDailySummary);
 
 // Attendance routes for unscheduled employees
-router.get('/attendance', employeeExpenseController.getAttendanceByDate);
-router.post('/bulk-attendance', employeeExpenseController.bulkSaveAttendance);
+router.get('/attendance', auth, checkPermission('employeeExpense_transfer_attendance', 'read'), employeeExpenseController.getAttendanceByDate);
+router.post('/bulk-attendance', auth, checkPermission('employeeExpense_transfer_attendance', 'write'), employeeExpenseController.bulkSaveAttendance);
 
 module.exports = router;

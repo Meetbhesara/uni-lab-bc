@@ -1,4 +1,5 @@
 const InstrumentMaster = require('../models/InstrumentMaster');
+const InstrumentGroup = require('../models/InstrumentGroup');
 const path = require('path');
 
 const storeInstrumentMaster = async (req, res) => {
@@ -158,10 +159,123 @@ const deleteInstrumentMaster = async (req, res) => {
     }
 };
 
+const getGroups = async (req, res) => {
+    try {
+        const groups = await InstrumentGroup.find().populate('instruments').sort({ createdAt: -1 });
+        res.json({ success: true, data: groups });
+    } catch (error) {
+        res.status(500).json({ success: false, message: error.message });
+    }
+};
+
+const getNextGroupId = async (req, res) => {
+    try {
+        const lastGroup = await InstrumentGroup.findOne({}, { groupId: 1 }).sort({ groupId: -1 });
+        let nextSeq = 1;
+        if (lastGroup && lastGroup.groupId) {
+            const num = parseInt(lastGroup.groupId.replace('GRP-', ''));
+            if (!isNaN(num)) nextSeq = num + 1;
+        }
+        const nextGroupId = 'GRP-' + String(nextSeq).padStart(3, '0');
+        res.json({ success: true, nextGroupId });
+    } catch (error) {
+        res.status(500).json({ success: false, message: error.message });
+    }
+};
+
+const createGroup = async (req, res) => {
+    try {
+        const { name, instruments } = req.body;
+        if (!name) {
+            return res.status(400).json({ success: false, message: 'Group name is required' });
+        }
+
+        // Verify no instrument is already in any group
+        if (instruments && instruments.length > 0) {
+            const existing = await InstrumentGroup.findOne({ instruments: { $in: instruments } });
+            if (existing) {
+                return res.status(400).json({ success: false, message: 'One or more selected instruments are already assigned to another group.' });
+            }
+        }
+
+        // Generate groupId
+        const lastGroup = await InstrumentGroup.findOne({}, { groupId: 1 }).sort({ groupId: -1 });
+        let nextSeq = 1;
+        if (lastGroup && lastGroup.groupId) {
+            const num = parseInt(lastGroup.groupId.replace('GRP-', ''));
+            if (!isNaN(num)) nextSeq = num + 1;
+        }
+        const groupId = 'GRP-' + String(nextSeq).padStart(3, '0');
+
+        const newGroup = new InstrumentGroup({
+            groupId,
+            name: name.trim(),
+            instruments: instruments || []
+        });
+
+        await newGroup.save();
+        res.status(201).json({ success: true, message: 'Group created successfully', data: newGroup });
+    } catch (error) {
+        if (error.code === 11000) {
+            return res.status(409).json({ success: false, message: 'Group name already exists' });
+        }
+        res.status(500).json({ success: false, message: error.message });
+    }
+};
+
+const updateGroup = async (req, res) => {
+    try {
+        const { name, instruments } = req.body;
+        const group = await InstrumentGroup.findById(req.params.id);
+        if (!group) {
+            return res.status(404).json({ success: false, message: 'Group not found' });
+        }
+
+        // Verify no instrument is already in another group
+        if (instruments && instruments.length > 0) {
+            const existing = await InstrumentGroup.findOne({
+                _id: { $ne: req.params.id },
+                instruments: { $in: instruments }
+            });
+            if (existing) {
+                return res.status(400).json({ success: false, message: 'One or more selected instruments are already assigned to another group.' });
+            }
+        }
+
+        if (name !== undefined) group.name = name.trim();
+        if (instruments !== undefined) group.instruments = instruments;
+
+        await group.save();
+        res.json({ success: true, message: 'Group updated successfully', data: group });
+    } catch (error) {
+        if (error.code === 11000) {
+            return res.status(409).json({ success: false, message: 'Group name already exists' });
+        }
+        res.status(500).json({ success: false, message: error.message });
+    }
+};
+
+const deleteGroup = async (req, res) => {
+    try {
+        const group = await InstrumentGroup.findByIdAndDelete(req.params.id);
+        if (!group) {
+            return res.status(404).json({ success: false, message: 'Group not found' });
+        }
+        res.json({ success: true, message: 'Group deleted successfully' });
+    } catch (error) {
+        res.status(500).json({ success: false, message: error.message });
+    }
+};
+
 module.exports = {
     storeInstrumentMaster,
     getInstruments,
     getInstrumentById,
     updateInstrumentMaster,
-    deleteInstrumentMaster
+    deleteInstrumentMaster,
+    getGroups,
+    getNextGroupId,
+    createGroup,
+    updateGroup,
+    deleteGroup
 };

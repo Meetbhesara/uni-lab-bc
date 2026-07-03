@@ -3,12 +3,19 @@ const router = express.Router();
 const multer = require('multer');
 const path = require('path');
 const fs = require('fs');
+const auth = require('../middlewares/auth');
+const checkPermission = require('../middlewares/checkPermission');
 const {
     storeInstrumentMaster,
     getInstruments,
     getInstrumentById,
     updateInstrumentMaster,
-    deleteInstrumentMaster
+    deleteInstrumentMaster,
+    getGroups,
+    getNextGroupId,
+    createGroup,
+    updateGroup,
+    deleteGroup
 } = require('../controllers/instrumentMasterController');
 
 // Dynamic Storage Configuration (NAS / Local)
@@ -59,10 +66,17 @@ const upload = multer({
     }
 });
 
-router.post('/',   upload.fields([{ name: 'photo', maxCount: 1 }, { name: 'photos', maxCount: 10 }]), storeInstrumentMaster);
-router.get('/',    getInstruments);
-router.get('/:id', getInstrumentById);
-router.put('/:id', upload.fields([{ name: 'photo', maxCount: 1 }, { name: 'photos', maxCount: 10 }]), updateInstrumentMaster);
-router.delete('/:id', deleteInstrumentMaster);
+// Group routes
+router.get('/groups/next-id', auth, checkPermission('instrumentMaster_groups', 'read'), getNextGroupId);
+router.get('/groups', auth, checkPermission('instrumentMaster_groups', 'read'), getGroups);
+router.post('/groups', auth, checkPermission('instrumentMaster_groups', 'write'), createGroup);
+router.put('/groups/:id', auth, checkPermission('instrumentMaster_groups', 'write'), updateGroup);
+router.delete('/groups/:id', auth, checkPermission('instrumentMaster_groups', 'write'), deleteGroup);
+
+router.post('/',   auth, checkPermission('instrumentMaster_form', 'write'), upload.fields([{ name: 'photo', maxCount: 1 }, { name: 'photos', maxCount: 10 }]), storeInstrumentMaster);
+router.get('/',    auth, checkPermission('instrumentMaster_view', 'read'), getInstruments);
+router.get('/:id', auth, checkPermission('instrumentMaster_view', 'read'), getInstrumentById);
+router.put('/:id', auth, checkPermission('instrumentMaster_form', 'write'), upload.fields([{ name: 'photo', maxCount: 1 }, { name: 'photos', maxCount: 10 }]), updateInstrumentMaster);
+router.delete('/:id', auth, checkPermission('instrumentMaster_view', 'write'), deleteInstrumentMaster);
 
 module.exports = router;

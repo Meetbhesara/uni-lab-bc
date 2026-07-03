@@ -4,15 +4,29 @@ const ScheduleMaster = require('../models/ScheduleMaster');
 const { autoGenerateMonthSchedules } = require('./monthScheduleGenerator');
 
 /**
+ * Converts any Date object to IST date components (year, month, day, hour, minute, second).
+ * IST is UTC + 5:30 (19800000 ms).
+ */
+const getISTComponents = (dateObj = new Date()) => {
+    const istDate = new Date(dateObj.getTime() + (5.5 * 60 * 60 * 1000));
+    return {
+        year: istDate.getUTCFullYear(),
+        month: istDate.getUTCMonth(),
+        day: istDate.getUTCDate(),
+        hour: istDate.getUTCHours(),
+        minute: istDate.getUTCMinutes(),
+        second: istDate.getUTCSeconds()
+    };
+};
+
+/**
  * Auto-marks active employees as Absent if they are NOT scheduled for the particular date,
  * provided that there is at least one schedule created for that date (indicating it is a working/scheduled day).
  * @param {Date} dateObj - The target date to check and update
  */
 const autoMarkAbsentForDate = async (dateObj) => {
     try {
-        const year = dateObj.getFullYear();
-        const month = dateObj.getMonth();
-        const day = dateObj.getDate();
+        const { year, month, day } = getISTComponents(dateObj);
         
         const startOfDay = new Date(year, month, day, 0, 0, 0, 0);
         const endOfDay   = new Date(year, month, day, 23, 59, 59, 999);
@@ -90,31 +104,33 @@ const autoMarkAbsentForDate = async (dateObj) => {
         }
         console.log(`[Attendance Scheduler] Auto-marked ${count} unscheduled employee(s) as Absent for date: ${year}-${month + 1}-${day}`);
     } catch (error) {
-        console.error(`[Attendance Scheduler] Error for date ${dateObj.toLocaleDateString()}:`, error);
+        console.error(`[Attendance Scheduler] Error for date:`, error);
     }
 };
 
 /**
- * Schedules the next auto-absent run for 11:59:59 PM today.
+ * Schedules the next auto-absent run for 11:00:00 PM (23:00:00) IST today.
  */
 const scheduleNextRun = () => {
     const now = new Date();
+    const { year, month, day } = getISTComponents(now);
     
-    // Set target time to 11:59:59 PM today
-    const target = new Date(now.getFullYear(), now.getMonth(), now.getDate(), 23, 59, 59, 999);
+    // In IST (UTC+05:30), 23:00:00 IST corresponds exactly to 17:30:00 UTC
+    let targetUTC = new Date(Date.UTC(year, month, day, 17, 30, 0, 0));
     
-    let delay = target.getTime() - now.getTime();
-    if (delay < 0) {
-        // If past 11:59:59 PM today, schedule for 11:59:59 PM tomorrow
-        target.setDate(target.getDate() + 1);
-        delay = target.getTime() - now.getTime();
+    // If current time is already at or past 11:00:00 PM IST today, schedule for 11:00:00 PM IST tomorrow
+    if (now.getTime() >= targetUTC.getTime()) {
+        targetUTC = new Date(Date.UTC(year, month, day + 1, 17, 30, 0, 0));
     }
     
-    console.log(`[Attendance Scheduler] Next auto-absent run scheduled in ${(delay / 1000 / 60).toFixed(2)} minutes (at ${target.toLocaleString()})`);
+    const delay = targetUTC.getTime() - now.getTime();
+    
+    const { year: tY, month: tM, day: tD, hour: tH, minute: tMin } = getISTComponents(targetUTC);
+    console.log(`[Attendance Scheduler] Next auto-absent run scheduled in ${(delay / 1000 / 60).toFixed(2)} minutes (at ${tY}-${String(tM + 1).padStart(2, '0')}-${String(tD).padStart(2, '0')} ${String(tH).padStart(2, '0')}:${String(tMin).padStart(2, '0')} IST)`);
     
     setTimeout(async () => {
-        const today = new Date();
-        await autoMarkAbsentForDate(today);
+        const runDate = new Date();
+        await autoMarkAbsentForDate(runDate);
         // Schedule next run recursively
         scheduleNextRun();
     }, delay);
@@ -125,21 +141,21 @@ const scheduleNextRun = () => {
  * (handling server downtime) and start the scheduler loop.
  */
 const initializeScheduler = async () => {
-    console.log('[Attendance Scheduler] Initializing...');
+    console.log('[Attendance Scheduler] Initializing with strict IST timing (11:00 PM IST)...');
     
     // Generate any missing MONTH schedules first (important for correct downtime check)
     await autoGenerateMonthSchedules();
     
     // Catch up attendance for the past 7 days (downtime protection)
     for (let i = 7; i >= 1; i--) {
-        const catchUpDate = new Date();
-        catchUpDate.setDate(catchUpDate.getDate() - i);
+        const catchUpDate = new Date(Date.now() - (i * 24 * 60 * 60 * 1000));
         await autoMarkAbsentForDate(catchUpDate);
     }
     
-    // Also, if the server is started late (e.g. exactly between 11:59:00 PM and 11:59:59 PM)
+    // Also, if the server is started late (between 11:00 PM and midnight IST today)
     const now = new Date();
-    if (now.getHours() === 23 && now.getMinutes() >= 59) {
+    const { hour } = getISTComponents(now);
+    if (hour >= 23) {
         await autoMarkAbsentForDate(now);
     }
     

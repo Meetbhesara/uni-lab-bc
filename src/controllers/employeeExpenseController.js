@@ -11,28 +11,58 @@ exports.adminAddExpense = async (req, res) => {
         const { employeeId, date, notes, expenses, otherExpensesList, clientSites, attendance, attendanceRemark, givenTo, receivedFrom, fuelType } = req.body;
         if (!employeeId) return res.status(400).json({ success: false, message: 'Employee ID is required' });
 
+        const cleanNum = (val) => (!val || isNaN(Number(val)) ? 0 : Number(val));
+
         // Parse JSON fields from FormData
-        const parsedExpenses = typeof expenses === 'string' ? JSON.parse(expenses) : (expenses || {});
-        const parsedOtherExpenses = typeof otherExpensesList === 'string' ? JSON.parse(otherExpensesList) : (otherExpensesList || []);
-        const parsedClientSites = typeof clientSites === 'string' ? JSON.parse(clientSites) : (clientSites || []);
-        const parsedGivenTo = typeof givenTo === 'string' ? JSON.parse(givenTo) : (givenTo || []);
-        const parsedReceivedFrom = typeof receivedFrom === 'string' ? JSON.parse(receivedFrom) : (receivedFrom || []);
+        const rawExpenses = typeof expenses === 'string' ? JSON.parse(expenses) : (expenses || {});
+        const parsedExpenses = {
+            breakfast: cleanNum(rawExpenses.breakfast),
+            lunch: cleanNum(rawExpenses.lunch),
+            dinner: cleanNum(rawExpenses.dinner),
+            petrol: cleanNum(rawExpenses.petrol)
+        };
+        if (rawExpenses.fuelType || fuelType) {
+            parsedExpenses.fuelType = rawExpenses.fuelType || fuelType;
+        }
+
+        const rawOtherExpenses = typeof otherExpensesList === 'string' ? JSON.parse(otherExpensesList) : (otherExpensesList || []);
+        const parsedOtherExpenses = (Array.isArray(rawOtherExpenses) ? rawOtherExpenses : []).map(item => ({
+            ...item,
+            amount: cleanNum(item?.amount)
+        }));
+
+        const rawClientSites = typeof clientSites === 'string' ? JSON.parse(clientSites) : (clientSites || []);
+        const parsedClientSites = (Array.isArray(rawClientSites) ? rawClientSites : []).map(cs => ({
+            ...cs,
+            quantity: cleanNum(cs?.quantity),
+            allocatedExpense: cleanNum(cs?.allocatedExpense),
+            allocatedCredit: cleanNum(cs?.allocatedCredit)
+        }));
+
+        const rawGivenTo = typeof givenTo === 'string' ? JSON.parse(givenTo) : (givenTo || []);
+        const parsedGivenTo = (Array.isArray(rawGivenTo) ? rawGivenTo : []).map(item => ({
+            ...item,
+            amount: cleanNum(item?.amount)
+        }));
+
+        const rawReceivedFrom = typeof receivedFrom === 'string' ? JSON.parse(receivedFrom) : (receivedFrom || []);
+        const parsedReceivedFrom = (Array.isArray(rawReceivedFrom) ? rawReceivedFrom : []).map(item => ({
+            ...item,
+            amount: cleanNum(item?.amount)
+        }));
+
         const { deletedExistingFiles } = req.body;
         const parsedDeletedExistingFiles = typeof deletedExistingFiles === 'string' ? JSON.parse(deletedExistingFiles) : (deletedExistingFiles || []);
 
         // 1. Calculate Totals
-        const standardTotal = (Number(parsedExpenses.breakfast) || 0) + 
-                            (Number(parsedExpenses.lunch) || 0) + 
-                            (Number(parsedExpenses.dinner) || 0) + 
-                            (Number(parsedExpenses.petrol) || 0);
-        
-        const otherTotal = parsedOtherExpenses.reduce((acc, curr) => acc + (Number(curr.amount) || 0), 0);
+        const standardTotal = parsedExpenses.breakfast + parsedExpenses.lunch + parsedExpenses.dinner + parsedExpenses.petrol;
+        const otherTotal = parsedOtherExpenses.reduce((acc, curr) => acc + curr.amount, 0);
         
         // Money Given To Others (Debit for current employee)
-        const totalGiven = parsedGivenTo.reduce((acc, curr) => acc + (Number(curr.amount) || 0), 0);
+        const totalGiven = parsedGivenTo.reduce((acc, curr) => acc + curr.amount, 0);
         
         // Money Received From Others (Credit for current employee)
-        const totalReceived = parsedReceivedFrom.reduce((acc, curr) => acc + (Number(curr.amount) || 0), 0);
+        const totalReceived = parsedReceivedFrom.reduce((acc, curr) => acc + curr.amount, 0);
 
         const totalExpense = standardTotal + otherTotal;
         const netImpact = totalExpense + totalGiven - totalReceived;
@@ -560,19 +590,39 @@ exports.addExpense = async (req, res) => {
         const employeeId = req.employee._id;
         const { date, notes, expenses, otherExpensesList, siteIds, attendance, attendanceRemark, creditDebit } = req.body;
 
+        const cleanNum = (val) => (!val || isNaN(Number(val)) ? 0 : Number(val));
+        const rawExpenses = typeof expenses === 'string' ? JSON.parse(expenses) : (expenses || {});
+        const parsedExpenses = {
+            breakfast: cleanNum(rawExpenses.breakfast),
+            lunch: cleanNum(rawExpenses.lunch),
+            dinner: cleanNum(rawExpenses.dinner),
+            petrol: cleanNum(rawExpenses.petrol)
+        };
+        if (rawExpenses.fuelType) parsedExpenses.fuelType = rawExpenses.fuelType;
+
+        const rawOtherExpenses = typeof otherExpensesList === 'string' ? JSON.parse(otherExpensesList) : (otherExpensesList || []);
+        const parsedOtherExpenses = (Array.isArray(rawOtherExpenses) ? rawOtherExpenses : []).map(item => ({
+            ...item,
+            amount: cleanNum(item?.amount)
+        }));
+
+        const rawGivenTo = typeof creditDebit?.givenTo === 'string' ? JSON.parse(creditDebit.givenTo) : (creditDebit?.givenTo || []);
+        const givenTo = (Array.isArray(rawGivenTo) ? rawGivenTo : []).map(item => ({
+            ...item,
+            amount: cleanNum(item?.amount)
+        }));
+
+        const rawReceivedFrom = typeof creditDebit?.receivedFrom === 'string' ? JSON.parse(creditDebit.receivedFrom) : (creditDebit?.receivedFrom || []);
+        const receivedFrom = (Array.isArray(rawReceivedFrom) ? rawReceivedFrom : []).map(item => ({
+            ...item,
+            amount: cleanNum(item?.amount)
+        }));
+
         // 1. Calculate Totals
-        const standardTotal = (Number(expenses?.breakfast) || 0) + 
-                            (Number(expenses?.lunch) || 0) + 
-                            (Number(expenses?.dinner) || 0) + 
-                            (Number(expenses?.petrol) || 0);
-        
-        const otherTotal = (otherExpensesList || []).reduce((acc, curr) => acc + (Number(curr.amount) || 0), 0);
-        
-        const givenTo = creditDebit?.givenTo || [];
-        const receivedFrom = creditDebit?.receivedFrom || [];
-        
-        const totalGiven = givenTo.reduce((acc, curr) => acc + (Number(curr.amount) || 0), 0);
-        const totalReceived = receivedFrom.reduce((acc, curr) => acc + (Number(curr.amount) || 0), 0);
+        const standardTotal = parsedExpenses.breakfast + parsedExpenses.lunch + parsedExpenses.dinner + parsedExpenses.petrol;
+        const otherTotal = parsedOtherExpenses.reduce((acc, curr) => acc + curr.amount, 0);
+        const totalGiven = givenTo.reduce((acc, curr) => acc + curr.amount, 0);
+        const totalReceived = receivedFrom.reduce((acc, curr) => acc + curr.amount, 0);
 
         const totalExpense = standardTotal + otherTotal;
         const netImpact = totalExpense + totalGiven - totalReceived;
@@ -599,8 +649,8 @@ exports.addExpense = async (req, res) => {
             employeeId,
             date: date || new Date(),
             clientSites,
-            expenses,
-            otherExpensesList,
+            expenses: parsedExpenses,
+            otherExpensesList: parsedOtherExpenses,
             totalExpense,
             remainingBalance: employee.totalAmount,
             notes,
@@ -764,6 +814,8 @@ exports.getDailySummary = async (req, res) => {
             .populate('employeeId', 'name totalAmount foodAllowance')
             .populate('clientSites.clientId', 'clientName')
             .populate('clientSites.siteId', 'siteName')
+            .populate('creditDebit.givenTo.employeeRef', 'name')
+            .populate('creditDebit.receivedFrom.employeeRef', 'name')
             .sort({ 'employeeId': 1, date: -1 })
             .lean();
 
@@ -799,6 +851,25 @@ exports.getDailySummary = async (req, res) => {
             const rawRemark = exp.attendanceRemark || '';
             const cleanRemark = rawRemark.toLowerCase().includes('auto-marked') || rawRemark.toLowerCase().includes('auto marked') ? '' : rawRemark;
 
+            // Details for row click breakdown
+            const details = {
+                breakfast: exp.expenses?.breakfast || 0,
+                lunch: exp.expenses?.lunch || 0,
+                dinner: exp.expenses?.dinner || 0,
+                petrol: exp.expenses?.petrol || 0,
+                fuelType: exp.expenses?.fuelType || '',
+                otherExpensesList: exp.otherExpensesList || [],
+                givenTo: (exp.creditDebit?.givenTo || []).map(g => ({
+                    employeeName: g.employeeRef?.name || 'Unknown',
+                    amount: g.amount
+                })),
+                receivedFrom: (exp.creditDebit?.receivedFrom || []).map(r => ({
+                    employeeName: r.employeeRef?.name || 'Unknown',
+                    amount: r.amount
+                })),
+                notes: exp.notes || ''
+            };
+
             empMap[empId].entries.push({
                 date: exp.date,
                 attendance: exp.attendance || 'Present',
@@ -807,7 +878,8 @@ exports.getDailySummary = async (req, res) => {
                 totalExpense: exp.totalExpense || 0,
                 totalDebit,
                 totalCredit,
-                category: 'Expense'
+                category: 'Expense',
+                details
             });
         });
 
@@ -835,7 +907,18 @@ exports.getDailySummary = async (req, res) => {
                         category: 'Transfer',
                         type: l.type,
                         description: l.description,
-                        referenceId: l.referenceId
+                        referenceId: l.referenceId,
+                        details: {
+                            breakfast: 0,
+                            lunch: 0,
+                            dinner: 0,
+                            petrol: 0,
+                            fuelType: '',
+                            otherExpensesList: [],
+                            givenTo: l.type === 'Debit' ? [{ employeeName: l.relatedEmployee?.name || 'Unknown', amount: l.amount }] : [],
+                            receivedFrom: l.type === 'Credit' ? [{ employeeName: l.relatedEmployee?.name || 'Unknown', amount: l.amount }] : [],
+                            notes: l.description || ''
+                        }
                     });
                 }
             }
@@ -848,6 +931,9 @@ exports.getDailySummary = async (req, res) => {
                 const dateKey = new Date(entry.date).toISOString().split('T')[0];
                 if (!dateGrouped[dateKey]) {
                     dateGrouped[dateKey] = { ...entry };
+                    if (entry.details) {
+                        dateGrouped[dateKey].details = { ...entry.details };
+                    }
                 } else {
                     const existing = dateGrouped[dateKey];
                     existing.totalDebit = (existing.totalDebit || 0) + (entry.totalDebit || 0);
@@ -865,6 +951,33 @@ exports.getDailySummary = async (req, res) => {
                     }
                     if (existing.category !== entry.category) {
                         existing.category = 'Combined';
+                    }
+
+                    // Merge details
+                    if (entry.details) {
+                        if (!existing.details) {
+                            existing.details = {
+                                breakfast: 0, lunch: 0, dinner: 0, petrol: 0, fuelType: '',
+                                otherExpensesList: [], givenTo: [], receivedFrom: [], notes: ''
+                            };
+                        }
+                        existing.details.breakfast = (existing.details.breakfast || 0) + (entry.details.breakfast || 0);
+                        existing.details.lunch = (existing.details.lunch || 0) + (entry.details.lunch || 0);
+                        existing.details.dinner = (existing.details.dinner || 0) + (entry.details.dinner || 0);
+                        existing.details.petrol = (existing.details.petrol || 0) + (entry.details.petrol || 0);
+                        if (entry.details.fuelType) existing.details.fuelType = entry.details.fuelType;
+                        if (entry.details.otherExpensesList?.length > 0) {
+                            existing.details.otherExpensesList = [...(existing.details.otherExpensesList || []), ...entry.details.otherExpensesList];
+                        }
+                        if (entry.details.givenTo?.length > 0) {
+                            existing.details.givenTo = [...(existing.details.givenTo || []), ...entry.details.givenTo];
+                        }
+                        if (entry.details.receivedFrom?.length > 0) {
+                            existing.details.receivedFrom = [...(existing.details.receivedFrom || []), ...entry.details.receivedFrom];
+                        }
+                        if (entry.details.notes) {
+                            existing.details.notes = existing.details.notes ? `${existing.details.notes} | ${entry.details.notes}` : entry.details.notes;
+                        }
                     }
                 }
             });

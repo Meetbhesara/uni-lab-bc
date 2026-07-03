@@ -17,8 +17,7 @@ router.post('/', async (req, res) => {
         }
 
         // 2. Find or Create User
-        const lowerEmail = email.toLowerCase();
-        let user = await User.findOne({ email: lowerEmail });
+        let user = await User.findByEmail(email);
         
         // --- NEW: Restrict if found user is an Admin ---
         if (user && user.isAdmin) {
@@ -27,7 +26,7 @@ router.post('/', async (req, res) => {
 
         if (!user) {
             user = new User({
-                email: lowerEmail,
+                email: email.toLowerCase(),
                 phone,
                 companyName: companyName || '',
                 contactPersonName: contactPersonName || '',

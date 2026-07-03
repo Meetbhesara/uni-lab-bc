@@ -520,16 +520,46 @@ const getAttendanceSummary = async (req, res) => {
             date: { $gte: startDate, $lt: endDate }
         }).select('date attendance').lean();
 
-        let present = 0, absent = 0, halfDay = 0;
+        const ScheduleMaster = require('../models/ScheduleMaster');
+        const now = new Date();
+        const effectiveEnd = endDate > now ? new Date(now.getFullYear(), now.getMonth(), now.getDate(), 23, 59, 59, 999) : endDate;
+
+        const schedules = await ScheduleMaster.find({
+            $or: [
+                { operative: employeeObjectId },
+                { helpers: employeeObjectId }
+            ],
+            scheduleDate: { $gte: startDate, $lt: effectiveEnd },
+            dayStatus: { $nin: ['Rejected', 'Skipped', 'Paused'] }
+        }).select('scheduleDate').lean();
+
+        const attMap = {};
         records.forEach(r => {
-            const att = r.attendance || 'Present';
+            if (r.date) {
+                const dateStr = new Date(r.date).toISOString().split('T')[0];
+                attMap[dateStr] = r.attendance || 'Present';
+            }
+        });
+
+        // Whoever employee is scheduled, by default give Present if no explicit attendance record exists
+        schedules.forEach(s => {
+            if (s.scheduleDate) {
+                const dateStr = new Date(s.scheduleDate).toISOString().split('T')[0];
+                if (!attMap[dateStr]) {
+                    attMap[dateStr] = 'Present';
+                }
+            }
+        });
+
+        let present = 0, absent = 0, halfDay = 0;
+        Object.values(attMap).forEach(att => {
             if (att === 'Present') present++;
             else if (att === 'Absent') absent++;
             else if (att === 'Half Day') halfDay++;
         });
 
-        // Count of calendar days with any record
-        const totalRecorded = records.length;
+        // Count of unique calendar days with any recorded or scheduled attendance
+        const totalRecorded = Object.keys(attMap).length;
 
         res.json({
             success: true,

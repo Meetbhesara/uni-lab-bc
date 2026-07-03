@@ -2,7 +2,7 @@ const mongoose = require('mongoose');
 
 const UserSchema = new mongoose.Schema({
     name: { type: String }, // can be optional, map to contactPersonName
-    email: { type: String, required: true, unique: true },
+    email: { type: String, required: true, unique: true, lowercase: true },
     phone: { type: String, required: true },
     password: { type: String }, // optional for guest users
     companyName: { type: String },
@@ -18,5 +18,11 @@ const UserSchema = new mongoose.Schema({
     permissions: { type: Object, default: {} },
     createdAt: { type: Date, default: Date.now }
 });
+
+UserSchema.statics.findByEmail = function(email) {
+    if (!email) return null;
+    const escapedEmail = email.replace(/[-\/\\^$*+?.()|[\]{}]/g, '\\$&');
+    return this.findOne({ email: { $regex: new RegExp("^" + escapedEmail + "$", "i") } });
+};
 
 module.exports = mongoose.model('User', UserSchema);

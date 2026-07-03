@@ -3,6 +3,8 @@ const router = express.Router();
 const multer = require('multer');
 const path = require('path');
 const fs = require('fs');
+const auth = require('../middlewares/auth');
+const checkPermission = require('../middlewares/checkPermission');
 const { storeEmployeeMaster, updateEmployeeMaster, getEmployees, getNextEmpId, deleteEmployeeMaster, getEmployeeById, updateMonthlyPayment, getAttendanceSummary } = require('../controllers/employeeMasterController');
 
 // Dynamic Storage Configuration
@@ -51,10 +53,10 @@ const upload = multer({
     }
 });
 
-router.get('/next-id', getNextEmpId);
-router.get('/:id', getEmployeeById);
+router.get('/next-id', auth, checkPermission('employeeMaster_form', 'read'), getNextEmpId);
+router.get('/:id', auth, checkPermission('employeeMaster_view', 'read'), getEmployeeById);
 
-router.post('/', upload.fields([
+router.post('/', auth, checkPermission('employeeMaster_form', 'write'), upload.fields([
     { name: 'photo', maxCount: 1 },
     { name: 'aadharCard', maxCount: 1 },
     { name: 'panCard', maxCount: 1 },
@@ -63,7 +65,7 @@ router.post('/', upload.fields([
     { name: 'bankDocuments', maxCount: 10 }
 ]), storeEmployeeMaster);
 
-router.put('/:id', upload.fields([
+router.put('/:id', auth, checkPermission('employeeMaster_form', 'write'), upload.fields([
     { name: 'photo', maxCount: 1 },
     { name: 'aadharCard', maxCount: 1 },
     { name: 'panCard', maxCount: 1 },
@@ -72,9 +74,9 @@ router.put('/:id', upload.fields([
     { name: 'bankDocuments', maxCount: 10 }
 ]), updateEmployeeMaster);
 
-router.get('/', getEmployees);
-router.delete('/:id', deleteEmployeeMaster);
-router.get('/:id/attendance-summary', getAttendanceSummary);
-router.put('/:id/monthly-payment', updateMonthlyPayment);
+router.get('/', auth, checkPermission('employeeMaster_view', 'read'), getEmployees);
+router.delete('/:id', auth, checkPermission('employeeMaster_view', 'write'), deleteEmployeeMaster);
+router.get('/:id/attendance-summary', auth, checkPermission('employeeMaster_payment', 'read'), getAttendanceSummary);
+router.put('/:id/monthly-payment', auth, checkPermission('employeeMaster_payment', 'write'), updateMonthlyPayment);
 
 module.exports = router;

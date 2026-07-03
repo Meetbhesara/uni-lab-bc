@@ -1,6 +1,7 @@
 const express = require('express');
 const router = express.Router();
 const auth = require('../middlewares/auth');
+const checkPermission = require('../middlewares/checkPermission');
 const { register, login, phoneLogin, phoneRegister, getUserByPhone, sendOtp, verifyOtp, sendAdminOtp, verifyAdminOtp, createAdmin, getAdmins, updateAdminPermissions, setup2FA, verifyAndEnable2FA, loginWith2FA, resetWithBackupCode, getMe, getUsers, getGeofenceSettings, updateGeofenceSettings, getAdminLoginReport } = require('../controllers/authController');
 
 router.get('/me', auth, getMe);
@@ -31,6 +32,6 @@ router.get('/geofence', auth, getGeofenceSettings);
 router.post('/geofence', auth, updateGeofenceSettings);
 
 // Admin Login Attendance Report
-router.get('/admin-login-report', auth, getAdminLoginReport);
+router.get('/admin-login-report', auth, checkPermission('employeeMaster_adminReport', 'read'), getAdminLoginReport);
 
 module.exports = router;
