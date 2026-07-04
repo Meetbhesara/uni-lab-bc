@@ -881,7 +881,7 @@ exports.getDailySummary = async (req, res) => {
         const expenses = await EmployeeExpense.find({
             date: { $gte: fiveDaysAgo, $lte: today }
         })
-            .populate('employeeId', 'name totalAmount foodAllowance')
+            .populate('employeeId', 'name totalAmount foodAllowance status')
             .populate('clientSites.clientId', 'clientName')
             .populate('clientSites.siteId', 'siteName')
             .populate('creditDebit.givenTo.employeeRef', 'name')
@@ -889,19 +889,57 @@ exports.getDailySummary = async (req, res) => {
             .sort({ 'employeeId': 1, date: -1 })
             .lean();
 
+        // ── Fetch all schedules in the last-5-days window ──────────────────────
+        // Scheduled operatives/helpers who never submitted an expense are
+        // completely invisible in the report otherwise (attendanceScheduler
+        // intentionally skips creating an EmployeeExpense for them).
+        const ScheduleMaster = require('../models/ScheduleMaster');
+        const schedules = await ScheduleMaster.find({
+            scheduleDate: { $gte: fiveDaysAgo, $lte: today },
+            dayStatus: { $nin: ['Rejected'] }
+        })
+            .populate('operative', 'name status')
+            .populate('helpers', 'name status')
+            .populate('site', 'siteName')
+            .lean();
+
+        // Build a map: "empId|YYYY-MM-DD" → { empName, siteName } for scheduled-only entries
+        // We will use this after building empMap from expenses to fill any gaps.
+        const scheduledPresenceMap = {}; // key: `${empId}|${dateKey}`
+        schedules.forEach(s => {
+            const dateKey = new Date(s.scheduleDate).toISOString().split('T')[0];
+            const siteName = s.site?.siteName || '';
+            const addEntry = (emp) => {
+                if (!emp || emp.status === 'Deactive') return;
+                const empId = String(emp._id);
+                const mapKey = `${empId}|${dateKey}`;
+                if (!scheduledPresenceMap[mapKey]) {
+                    scheduledPresenceMap[mapKey] = { empId, empName: emp.name, siteName, date: s.scheduleDate };
+                } else if (siteName && !scheduledPresenceMap[mapKey].siteName.includes(siteName)) {
+                    scheduledPresenceMap[mapKey].siteName += `, ${siteName}`;
+                }
+            };
+            if (s.operative) addEntry(s.operative);
+            (s.helpers || []).forEach(h => addEntry(h));
+        });
+        // ───────────────────────────────────────────────────────────────────────
+
         // Also fetch ledger entries for the same period (credit & debit)
         const EmployeeLedger = require('../models/EmployeeLedger');
         const ledgers = await EmployeeLedger.find({
             date: { $gte: fiveDaysAgo, $lte: today }
         })
-            .populate('employee', 'name')
+            .populate('employee', 'name status')
             .populate('relatedEmployee', 'name')
             .sort({ date: -1 })
             .lean();
 
-        // Group expenses by employee
+        // Group expenses by employee — skip deactivated employees entirely
         const empMap = {};
         expenses.forEach(exp => {
+            // Skip if employee is deactivated
+            if (exp.employeeId?.status === 'Deactive') return;
+
             const empId = String(exp.employeeId?._id || exp.employeeId);
             const empName = exp.employeeId?.name || 'Unknown';
             if (!empMap[empId]) {
@@ -957,6 +995,9 @@ exports.getDailySummary = async (req, res) => {
         const expenseRefIds = new Set(expenses.map(e => String(e._id)));
         ledgers.forEach(l => {
             if (l.category === 'Transfer' && !expenseRefIds.has(String(l.referenceId))) {
+                // Skip deactivated employees in ledger-only entries too
+                if (l.employee?.status === 'Deactive') return;
+
                 const empId = String(l.employee?._id || l.employee);
                 const empName = l.employee?.name || 'Unknown';
                 if (!empMap[empId]) {
@@ -993,6 +1034,36 @@ exports.getDailySummary = async (req, res) => {
                 }
             }
         });
+
+        // ── Always inject a schedule-based Present entry for every allocation ──
+        // If a site is allocated to an operative/helper on a given day, that day
+        // MUST appear in the report — regardless of whether they submitted an
+        // expense, daily report, or money transfer.
+        // The consolidation loop below merges entries with the same date, so if
+        // an expense already exists for that day it will be merged with this entry
+        // (expense data wins for amounts; schedule siteName is merged in).
+        Object.values(scheduledPresenceMap).forEach(({ empId, empName, siteName, date: schedDate }) => {
+            if (!empMap[empId]) {
+                empMap[empId] = { empId, empName, entries: [] };
+            }
+            // Always push — consolidation handles de-duplication by date
+            empMap[empId].entries.push({
+                date: schedDate,
+                attendance: 'Present',
+                attendanceRemark: '',
+                siteNames: siteName,
+                totalExpense: 0,
+                totalDebit: 0,
+                totalCredit: 0,
+                category: 'Schedule',
+                details: {
+                    breakfast: 0, lunch: 0, dinner: 0, petrol: 0,
+                    fuelType: '', otherExpensesList: [],
+                    givenTo: [], receivedFrom: [], notes: ''
+                }
+            });
+        });
+        // ──────────────────────────────────────────────────────────────────────
 
         // Consolidate entries by date so there are no duplicate dates per employee
         const result = Object.values(empMap).map(emp => {
