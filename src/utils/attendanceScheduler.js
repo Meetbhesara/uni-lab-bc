@@ -61,12 +61,26 @@ const autoMarkAbsentForDate = async (dateObj) => {
             $or: [{ status: 'Active' }, { status: { $exists: false } }, { status: null }]
         });
         
+        const User = require('../models/User');
+        const adminUsers = await User.find({ isAdmin: true }).select('email').lean();
+        const adminEmailSet = new Set(
+            adminUsers
+                .map(u => (u.email && typeof u.email === 'string') ? u.email.toLowerCase().trim() : '')
+                .filter(Boolean)
+        );
+
         let count = 0;
         for (const emp of activeEmployees) {
             const empIdStr = String(emp._id);
             
             // Bypass employees who ARE scheduled on this date
             if (scheduledEmployeeIds.has(empIdStr)) {
+                continue;
+            }
+
+            // Bypass employees whose email is linked to an Admin user account
+            const empEmail = (emp.email && typeof emp.email === 'string') ? emp.email.toLowerCase().trim() : '';
+            if (empEmail && adminEmailSet.has(empEmail)) {
                 continue;
             }
             

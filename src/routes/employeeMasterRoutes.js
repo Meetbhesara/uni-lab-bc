@@ -5,7 +5,7 @@ const path = require('path');
 const fs = require('fs');
 const auth = require('../middlewares/auth');
 const checkPermission = require('../middlewares/checkPermission');
-const { storeEmployeeMaster, updateEmployeeMaster, getEmployees, getNextEmpId, deleteEmployeeMaster, getEmployeeById, updateMonthlyPayment, getAttendanceSummary } = require('../controllers/employeeMasterController');
+const { storeEmployeeMaster, updateEmployeeMaster, getEmployees, getNextEmpId, deleteEmployeeMaster, getEmployeeById, updateMonthlyPayment, getAttendanceSummary, getAttendanceDetail } = require('../controllers/employeeMasterController');
 
 // Dynamic Storage Configuration
 const storage = multer.diskStorage({
@@ -77,6 +77,7 @@ router.put('/:id', auth, checkPermission('employeeMaster_form', 'write'), upload
 router.get('/', auth, checkPermission('employeeMaster_view', 'read'), getEmployees);
 router.delete('/:id', auth, checkPermission('employeeMaster_view', 'write'), deleteEmployeeMaster);
 router.get('/:id/attendance-summary', auth, checkPermission('employeeMaster_payment', 'read'), getAttendanceSummary);
+router.get('/:id/attendance-detail', auth, checkPermission('employeeMaster_payment', 'read'), getAttendanceDetail);
 router.put('/:id/monthly-payment', auth, checkPermission('employeeMaster_payment', 'write'), updateMonthlyPayment);
 
 module.exports = router;

@@ -6,8 +6,11 @@ const AdminLoginLogSchema = new mongoose.Schema({
     email: { type: String },
     phone: { type: String },
     loginAt: { type: Date, default: Date.now },
+    logoutAt: { type: Date },
+    lastActiveAt: { type: Date, default: Date.now },
     dateStr: { type: String, required: true, index: true }, // YYYY-MM-DD
     ipAddress: { type: String }
 });
 
 module.exports = mongoose.model('AdminLoginLog', AdminLoginLogSchema);
+

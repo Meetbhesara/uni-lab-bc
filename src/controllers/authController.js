@@ -39,6 +39,7 @@ const recordAdminLogin = async (user, req) => {
             email: user.email || '',
             phone: user.phone || '',
             loginAt: now,
+            lastActiveAt: now,
             dateStr: dateStr,
             ipAddress: typeof ip === 'string' ? ip.split(',')[0] : ''
         });
@@ -122,9 +123,15 @@ const getMe = async (req, res) => {
             const istOffset = 5.5 * 60 * 60 * 1000;
             const istDate = new Date(now.getTime() + istOffset);
             const dateStr = istDate.toISOString().split('T')[0];
-            const existingToday = await AdminLoginLog.findOne({ userId: user._id, dateStr });
+            const existingToday = await AdminLoginLog.findOne({ userId: user._id, dateStr }).sort({ loginAt: -1 });
             if (!existingToday) {
                 await recordAdminLogin(user, req);
+            } else {
+                existingToday.lastActiveAt = now;
+                if (existingToday.logoutAt) {
+                    existingToday.logoutAt = undefined;
+                }
+                await existingToday.save();
             }
         }
 
@@ -391,7 +398,7 @@ const verifyOtp = async (req, res) => {
         user.otpExpires = undefined;
         await user.save();
 
-        const payload = { id: user.id, isAdmin: user.isAdmin };
+        const payload = { id: user.id, isAdmin: user.isAdmin, isSuperAdmin: user.isSuperAdmin };
         jwt.sign(payload, process.env.JWT_SECRET, { expiresIn: process.env.JWT_EXPIRE || '365d' }, (err, token) => {
             if (err) throw err;
             res.json({ token, user: { id: user.id, name: user.name, email: user.email, phone: user.phone, isAdmin: user.isAdmin, isSuperAdmin: user.isSuperAdmin, permissions: user.permissions, companyName: user.companyName, contactPersonName: user.contactPersonName, gstNumber: user.gstNumber } });
@@ -473,7 +480,7 @@ const verifyAdminOtp = async (req, res) => {
         user.otpExpires = undefined;
         await user.save();
 
-        const payload = { id: user.id, isAdmin: user.isAdmin };
+        const payload = { id: user.id, isAdmin: user.isAdmin, isSuperAdmin: user.isSuperAdmin };
         jwt.sign(payload, process.env.JWT_SECRET, { expiresIn: process.env.JWT_EXPIRE || '1h' }, async (err, token) => {
             if (err) throw err;
             await recordAdminLogin(user, req);
@@ -805,11 +812,26 @@ const getAdminLoginReport = async (req, res) => {
                         loginCount = dayLogs.length;
 
                         const formatT = (dt) => {
+                            if (!dt) return '-';
                             const dObj = new Date(dt);
                             return dObj.toLocaleTimeString('en-IN', { timeZone: 'Asia/Kolkata', hour: '2-digit', minute: '2-digit', hour12: true });
                         };
-                        firstLogin = formatT(dayLogs[0].loginAt);
-                        lastLogin = dayLogs.length > 1 ? formatT(dayLogs[dayLogs.length - 1].loginAt) : firstLogin;
+
+                        const firstLog = dayLogs[0];
+                        const latestLog = dayLogs[dayLogs.length - 1];
+
+                        firstLogin = formatT(firstLog.loginAt);
+
+                        let logoutTimeStr = '-';
+                        if (latestLog.logoutAt) {
+                            logoutTimeStr = formatT(latestLog.logoutAt);
+                        } else if (fullDateStr === istDate.toISOString().split('T')[0]) {
+                            logoutTimeStr = 'Active (Logged In)';
+                        } else {
+                            logoutTimeStr = formatT(latestLog.lastActiveAt || latestLog.loginAt);
+                        }
+
+                        lastLogin = logoutTimeStr;
                     } else {
                         status = 'Absent';
                         absentDays++;
@@ -822,6 +844,7 @@ const getAdminLoginReport = async (req, res) => {
                     status,
                     firstLogin,
                     lastLogin,
+                    logoutTime: lastLogin,
                     loginCount
                 });
             }
@@ -857,5 +880,85 @@ const getAdminLoginReport = async (req, res) => {
     }
 };
 
-module.exports = { register, login, phoneLogin, phoneRegister, getUserByPhone, sendOtp, verifyOtp, sendAdminOtp, verifyAdminOtp, createAdmin, setup2FA, verifyAndEnable2FA, loginWith2FA, resetWithBackupCode, getAdmins, updateAdminPermissions, getMe, getUsers, getGeofenceSettings, updateGeofenceSettings, getAdminLoginReport };
+const logout = async (req, res) => {
+    try {
+        if (req.user && req.user.isAdmin) {
+            const now = new Date();
+            const istOffset = 5.5 * 60 * 60 * 1000;
+            const istDate = new Date(now.getTime() + istOffset);
+            const dateStr = istDate.toISOString().split('T')[0];
+
+            const latestLog = await AdminLoginLog.findOne({ userId: req.user.id, dateStr }).sort({ loginAt: -1 });
+            if (latestLog) {
+                latestLog.logoutAt = now;
+                latestLog.lastActiveAt = now;
+                await latestLog.save();
+            }
+        }
+        res.json({ success: true, message: 'Logged out successfully' });
+    } catch (err) {
+        console.error('Logout error:', err.message);
+        res.status(500).json({ success: false, message: 'Server error during logout' });
+    }
+};
+
+const deleteAccount = async (req, res) => {
+    try {
+        let callerId = req.user?.id;
+        let isSuper = req.user?.isSuperAdmin;
+
+        // If not populated by auth middleware, check header token directly
+        if (!callerId) {
+            const tokenHeader = req.header('x-auth-token') || req.header('Authorization') || req.query.token;
+            if (tokenHeader) {
+                let token = tokenHeader;
+                if (typeof tokenHeader === 'string' && tokenHeader.startsWith('Bearer ')) {
+                    token = tokenHeader.slice(7).trimLeft();
+                }
+                try {
+                    const decoded = jwt.verify(token, process.env.JWT_SECRET);
+                    if (decoded && decoded.id) {
+                        callerId = decoded.id;
+                        isSuper = decoded.isSuperAdmin;
+                    }
+                } catch {
+                    // Token verification issue, will check callerId below or fail
+                }
+            }
+        }
+
+        if (!callerId) {
+            return res.status(401).json({ success: false, message: 'Authentication required. Please login again.' });
+        }
+
+        // Always verify via DB if isSuper is not explicitly true in token
+        if (!isSuper) {
+            const callerUser = await User.findById(callerId);
+            if (callerUser) {
+                isSuper = callerUser.isSuperAdmin;
+            }
+        }
+
+        if (!isSuper) {
+            return res.status(403).json({ success: false, message: 'Access Denied: Only Super Administrators can delete accounts.' });
+        }
+
+        const { id } = req.params;
+        const targetUser = await User.findById(id);
+        if (!targetUser) {
+            return res.status(404).json({ success: false, message: 'Account not found.' });
+        }
+        if (targetUser.isSuperAdmin) {
+            return res.status(400).json({ success: false, message: 'Cannot delete a Super Admin account.' });
+        }
+
+        await User.findByIdAndDelete(id);
+        res.json({ success: true, message: 'Account deleted successfully.' });
+    } catch (err) {
+        console.error('Delete account error:', err.message);
+        res.status(500).json({ success: false, message: 'Server error during account deletion.' });
+    }
+};
+
+module.exports = { register, login, phoneLogin, phoneRegister, getUserByPhone, sendOtp, verifyOtp, sendAdminOtp, verifyAdminOtp, createAdmin, setup2FA, verifyAndEnable2FA, loginWith2FA, resetWithBackupCode, getAdmins, updateAdminPermissions, getMe, getUsers, getGeofenceSettings, updateGeofenceSettings, getAdminLoginReport, logout, deleteAccount };
 

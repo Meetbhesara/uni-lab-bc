@@ -2,9 +2,10 @@ const express = require('express');
 const router = express.Router();
 const auth = require('../middlewares/auth');
 const checkPermission = require('../middlewares/checkPermission');
-const { register, login, phoneLogin, phoneRegister, getUserByPhone, sendOtp, verifyOtp, sendAdminOtp, verifyAdminOtp, createAdmin, getAdmins, updateAdminPermissions, setup2FA, verifyAndEnable2FA, loginWith2FA, resetWithBackupCode, getMe, getUsers, getGeofenceSettings, updateGeofenceSettings, getAdminLoginReport } = require('../controllers/authController');
+const { register, login, phoneLogin, phoneRegister, getUserByPhone, sendOtp, verifyOtp, sendAdminOtp, verifyAdminOtp, createAdmin, getAdmins, updateAdminPermissions, setup2FA, verifyAndEnable2FA, loginWith2FA, resetWithBackupCode, getMe, getUsers, getGeofenceSettings, updateGeofenceSettings, getAdminLoginReport, logout, deleteAccount } = require('../controllers/authController');
 
 router.get('/me', auth, getMe);
+router.post('/logout', auth, logout);
 
 router.post('/register', register);
 router.post('/login', login);
@@ -19,8 +20,11 @@ router.post('/send-admin-otp', sendAdminOtp);
 router.post('/verify-admin-otp', verifyAdminOtp);
 router.post('/create-admin', createAdmin);
 router.get('/admins', getAdmins);
+router.delete('/admins/:id', deleteAccount);
 router.patch('/admins/:id/permissions', updateAdminPermissions);
 router.get('/users', getUsers);
+router.delete('/users/:id', deleteAccount);
+router.delete('/account/:id', deleteAccount);
 // MFA / TOTP Routes
 router.post('/setup-2fa', setup2FA);
 router.post('/verify-enable-2fa', verifyAndEnable2FA);

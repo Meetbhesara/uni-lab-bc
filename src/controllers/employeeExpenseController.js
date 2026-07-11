@@ -935,6 +935,51 @@ exports.getDailySummary = async (req, res) => {
             .lean();
 
         // Group expenses by employee — skip deactivated employees entirely
+        // ── Employee and Admin Report Synchronization Prep ──────────────────
+        const User = require('../models/User');
+        const AdminLoginLog = require('../models/AdminLoginLog');
+
+        const activeEmployeesList = await EmployeeMaster.find({ status: { $ne: 'Deactive' } })
+            .select('_id name email status')
+            .lean();
+
+        const allUsers = await User.find().select('_id name email isAdmin isSuperAdmin').lean();
+        const userEmailMap = {};
+        allUsers.forEach(u => {
+            if (u.email && typeof u.email === 'string' && u.email.trim()) {
+                userEmailMap[u.email.toLowerCase().trim()] = u;
+            }
+        });
+
+        // Map Employee ID -> Matched Admin User ID based on case-insensitive email comparison
+        const empIdToMatchedUserMap = {};
+        activeEmployeesList.forEach(emp => {
+            if (emp.email && typeof emp.email === 'string' && emp.email.trim()) {
+                const matchedUser = userEmailMap[emp.email.toLowerCase().trim()];
+                if (matchedUser) {
+                    empIdToMatchedUserMap[String(emp._id)] = String(matchedUser._id);
+                }
+            }
+        });
+
+        // Generate dateStr keys for the 5-day window
+        const windowDateKeys = [];
+        for (let d = new Date(fiveDaysAgo); d <= today; d.setDate(d.getDate() + 1)) {
+            windowDateKeys.push(d.toISOString().split('T')[0]);
+        }
+
+        const adminLogs = await AdminLoginLog.find({
+            dateStr: { $in: windowDateKeys }
+        }).lean();
+
+        const adminLoginLookup = new Set(); // key: `${userId}|${dateStr}`
+        adminLogs.forEach(log => {
+            if (log.userId && log.dateStr) {
+                adminLoginLookup.add(`${String(log.userId)}|${log.dateStr}`);
+            }
+        });
+        // ──────────────────────────────────────────────────────────────────
+
         const empMap = {};
         expenses.forEach(exp => {
             // Skip if employee is deactivated
@@ -943,7 +988,9 @@ exports.getDailySummary = async (req, res) => {
             const empId = String(exp.employeeId?._id || exp.employeeId);
             const empName = exp.employeeId?.name || 'Unknown';
             if (!empMap[empId]) {
-                empMap[empId] = { empId, empName, entries: [] };
+                empMap[empId] = { empId, empName, matchedUserId: empIdToMatchedUserMap[empId] || null, entries: [] };
+            } else if (!empMap[empId].matchedUserId) {
+                empMap[empId].matchedUserId = empIdToMatchedUserMap[empId] || null;
             }
             // Get site names
             const siteNames = (exp.clientSites || [])
@@ -1001,7 +1048,9 @@ exports.getDailySummary = async (req, res) => {
                 const empId = String(l.employee?._id || l.employee);
                 const empName = l.employee?.name || 'Unknown';
                 if (!empMap[empId]) {
-                    empMap[empId] = { empId, empName, entries: [] };
+                    empMap[empId] = { empId, empName, matchedUserId: empIdToMatchedUserMap[empId] || null, entries: [] };
+                } else if (!empMap[empId].matchedUserId) {
+                    empMap[empId].matchedUserId = empIdToMatchedUserMap[empId] || null;
                 }
                 // Avoid duplicate entries for same referenceId in same employee
                 const alreadyIn = empMap[empId].entries.some(e =>
@@ -1036,17 +1085,12 @@ exports.getDailySummary = async (req, res) => {
         });
 
         // ── Always inject a schedule-based Present entry for every allocation ──
-        // If a site is allocated to an operative/helper on a given day, that day
-        // MUST appear in the report — regardless of whether they submitted an
-        // expense, daily report, or money transfer.
-        // The consolidation loop below merges entries with the same date, so if
-        // an expense already exists for that day it will be merged with this entry
-        // (expense data wins for amounts; schedule siteName is merged in).
         Object.values(scheduledPresenceMap).forEach(({ empId, empName, siteName, date: schedDate }) => {
             if (!empMap[empId]) {
-                empMap[empId] = { empId, empName, entries: [] };
+                empMap[empId] = { empId, empName, matchedUserId: empIdToMatchedUserMap[empId] || null, entries: [] };
+            } else if (!empMap[empId].matchedUserId) {
+                empMap[empId].matchedUserId = empIdToMatchedUserMap[empId] || null;
             }
-            // Always push — consolidation handles de-duplication by date
             empMap[empId].entries.push({
                 date: schedDate,
                 attendance: 'Present',
@@ -1064,6 +1108,39 @@ exports.getDailySummary = async (req, res) => {
             });
         });
         // ──────────────────────────────────────────────────────────────────────
+
+        // ── Inject AdminLoginLog entries for matched employees ──────────────
+        adminLogs.forEach(log => {
+            if (!log.userId || !log.dateStr) return;
+            const matchingEmps = activeEmployeesList.filter(e => empIdToMatchedUserMap[String(e._id)] === String(log.userId));
+            matchingEmps.forEach(empDoc => {
+                const empId = String(empDoc._id);
+                if (!empMap[empId]) {
+                    empMap[empId] = { 
+                        empId, 
+                        empName: empDoc.name, 
+                        matchedUserId: String(log.userId), 
+                        entries: [] 
+                    };
+                }
+                empMap[empId].entries.push({
+                    date: new Date(`${log.dateStr}T12:00:00Z`),
+                    attendance: 'Present',
+                    attendanceRemark: 'Admin Portal Login',
+                    siteNames: 'Admin Office / Login',
+                    totalExpense: 0,
+                    totalDebit: 0,
+                    totalCredit: 0,
+                    category: 'Admin',
+                    details: {
+                        breakfast: 0, lunch: 0, dinner: 0, petrol: 0,
+                        fuelType: '', otherExpensesList: [],
+                        givenTo: [], receivedFrom: [], notes: 'Admin Portal Login'
+                    }
+                });
+            });
+        });
+        // ────────────────────────────────────────────────────────────────────
 
         // Consolidate entries by date so there are no duplicate dates per employee
         const result = Object.values(empMap).map(emp => {
@@ -1122,6 +1199,45 @@ exports.getDailySummary = async (req, res) => {
                     }
                 }
             });
+
+            // ── Apply Employee and Admin Report Synchronization ─────────────
+            Object.keys(dateGrouped).forEach(dateKey => {
+                const existing = dateGrouped[dateKey];
+                const hasSchedule = Boolean(scheduledPresenceMap[`${emp.empId}|${dateKey}`]);
+                const hasAdminLogin = emp.matchedUserId ? adminLoginLookup.has(`${emp.matchedUserId}|${dateKey}`) : false;
+
+                if (emp.matchedUserId) {
+                    // Admin Report is the primary source for employees with matching email
+                    if (hasAdminLogin) {
+                        existing.attendance = 'Present';
+                        if (!existing.siteNames || existing.siteNames === '-' || existing.siteNames === '—') {
+                            existing.siteNames = 'Admin Office / Login';
+                        }
+                    } else if (hasSchedule) {
+                        // Mark as Present if scheduled report/task exists, even if no admin login or report entry
+                        existing.attendance = 'Present';
+                        if (!existing.siteNames || existing.siteNames === '-' || existing.siteNames === '—') {
+                            existing.siteNames = scheduledPresenceMap[`${emp.empId}|${dateKey}`].siteName || 'Scheduled Duty';
+                        }
+                    } else {
+                        // Admin Report says Absent (no admin login) and no schedule
+                        existing.attendance = 'Absent';
+                        if (!existing.attendanceRemark) {
+                            existing.attendanceRemark = 'No Admin Login';
+                        }
+                    }
+                } else {
+                    // Regular employees without matching Admin account
+                    if (hasSchedule) {
+                        // Mark as Present if scheduled report/task exists, even if no separate employee report entry
+                        existing.attendance = 'Present';
+                        if (!existing.siteNames || existing.siteNames === '-' || existing.siteNames === '—') {
+                            existing.siteNames = scheduledPresenceMap[`${emp.empId}|${dateKey}`].siteName || 'Scheduled Duty';
+                        }
+                    }
+                }
+            });
+            // ────────────────────────────────────────────────────────────────
 
             return {
                 ...emp,

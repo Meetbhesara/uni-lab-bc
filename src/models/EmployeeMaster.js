@@ -111,7 +111,8 @@ const EmployeeMasterSchema = new mongoose.Schema({
             paymentStatus: { type: String, enum: ['Pending', 'Done'], default: 'Pending' },
             presentDays: { type: Number, default: null },
             absentDays: { type: Number, default: null },
-            upad: { type: Number, default: 0 }
+            upad: { type: Number, default: 0 },
+            incentive: { type: Number, default: 0 }
         }
     ],
     createdAt: {

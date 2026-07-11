@@ -408,8 +408,24 @@ const updateEmployeeMaster = async (req, res) => {
 
 const getEmployees = async (req, res) => {
     try {
-        const employees = await EmployeeMaster.find().sort({ createdAt: -1 });
-        res.json({ success: true, data: employees });
+        const User = require('../models/User');
+        const adminUsers = await User.find({ isAdmin: true }).select('email').lean();
+        const adminEmailSet = new Set(
+            adminUsers
+                .map(u => (u.email && typeof u.email === 'string') ? u.email.toLowerCase().trim() : '')
+                .filter(Boolean)
+        );
+
+        const employees = await EmployeeMaster.find().sort({ createdAt: -1 }).lean();
+        const enrichedEmployees = employees.map(emp => {
+            const empEmail = (emp.email && typeof emp.email === 'string') ? emp.email.toLowerCase().trim() : '';
+            return {
+                ...emp,
+                isLinkedAdmin: empEmail ? adminEmailSet.has(empEmail) : false
+            };
+        });
+
+        res.json({ success: true, data: enrichedEmployees });
     } catch (error) {
         res.status(500).json({ success: false, message: error.message });
     }
@@ -461,7 +477,7 @@ const getEmployeeById = async (req, res) => {
 const updateMonthlyPayment = async (req, res) => {
     try {
         const _id = req.params.id;
-        const { month, paymentMode, paymentStatus, presentDays, absentDays, upad } = req.body;
+        const { month, paymentMode, paymentStatus, presentDays, absentDays, upad, incentive } = req.body;
         
         if (!month) return res.status(400).json({ success: false, message: 'Month is required' });
 
@@ -475,6 +491,7 @@ const updateMonthlyPayment = async (req, res) => {
             if (presentDays !== undefined) employee.monthlyPayments[paymentIndex].presentDays = presentDays;
             if (absentDays !== undefined) employee.monthlyPayments[paymentIndex].absentDays = absentDays;
             if (upad !== undefined) employee.monthlyPayments[paymentIndex].upad = upad;
+            if (incentive !== undefined) employee.monthlyPayments[paymentIndex].incentive = incentive;
         } else {
             employee.monthlyPayments.push({
                 month,
@@ -482,7 +499,8 @@ const updateMonthlyPayment = async (req, res) => {
                 paymentStatus: paymentStatus || 'Pending',
                 presentDays: presentDays ?? null,
                 absentDays: absentDays ?? null,
-                upad: upad ?? 0
+                upad: upad ?? 0,
+                incentive: incentive ?? 0
             });
         }
 
@@ -601,6 +619,147 @@ const getAttendanceSummary = async (req, res) => {
     }
 };
 
+const getAttendanceDetail = async (req, res) => {
+    try {
+        const { id } = req.params;
+        const { month } = req.query; // YYYY-MM
+
+        if (!month) return res.status(400).json({ success: false, message: 'month query param required (YYYY-MM)' });
+
+        const [year, mon] = month.split('-').map(Number);
+        const startDate = new Date(year, mon - 1, 1);
+        const endDate   = new Date(year, mon, 1); // exclusive
+
+        const EmployeeExpense = require('../models/EmployeeExpense');
+        const ScheduleMaster = require('../models/ScheduleMaster');
+        const mongoose = require('mongoose');
+
+        let employeeObjectId = null;
+        if (mongoose.Types.ObjectId.isValid(id)) {
+            employeeObjectId = new mongoose.Types.ObjectId(id);
+        } else {
+            const emp = await EmployeeMaster.findOne({ empId: id });
+            if (!emp) return res.status(404).json({ success: false, message: 'Employee not found' });
+            employeeObjectId = emp._id;
+        }
+
+        // Fetch expenses for this month and populate site details
+        const expenses = await EmployeeExpense.find({
+            employeeId: employeeObjectId,
+            date: { $gte: startDate, $lt: endDate }
+        })
+        .populate('clientSites.siteId', 'siteName')
+        .lean();
+
+        // Map expenses by date string (YYYY-MM-DD)
+        const expenseMap = {};
+        expenses.forEach(exp => {
+            if (exp.date) {
+                const dateStr = new Date(exp.date).toISOString().split('T')[0];
+                expenseMap[dateStr] = exp;
+            }
+        });
+
+        // Fetch schedules
+        const now = new Date();
+        const effectiveEnd = endDate > now ? new Date(now.getFullYear(), now.getMonth(), now.getDate(), 23, 59, 59, 999) : endDate;
+
+        const schedules = await ScheduleMaster.find({
+            scheduleDate: { $gte: startDate, $lt: effectiveEnd },
+            dayStatus: { $nin: ['Rejected', 'Skipped', 'Paused'] }
+        })
+        .populate('site', 'siteName')
+        .lean();
+
+        // Filter schedules where this employee is operative or helper, map by date string
+        const scheduleMap = {};
+        schedules.forEach(s => {
+            if (s.scheduleDate) {
+                const dateStr = new Date(s.scheduleDate).toISOString().split('T')[0];
+                const opId = s.operative?._id || s.operative;
+                const isOp = opId && String(opId) === String(employeeObjectId);
+                const isHelper = (s.helpers || []).some(h => {
+                    const hId = h?._id || h;
+                    return hId && String(hId) === String(employeeObjectId);
+                });
+
+                if (isOp || isHelper) {
+                    if (!scheduleMap[dateStr]) {
+                        scheduleMap[dateStr] = [];
+                    }
+                    scheduleMap[dateStr].push(s);
+                }
+            }
+        });
+
+        // Generate day-by-day list
+        const daysInMonth = new Date(year, mon, 0).getDate();
+        const dailyData = [];
+        const todayStr = new Date().toISOString().split('T')[0];
+
+        for (let d = 1; d <= daysInMonth; d++) {
+            const currentDate = new Date(year, mon - 1, d);
+            const dateStr = currentDate.toISOString().split('T')[0];
+
+            let attendance = 'Absent';
+            let remark = 'No schedule or expense logged';
+            let sites = [];
+
+            const exp = expenseMap[dateStr];
+            const scheds = scheduleMap[dateStr];
+
+            if (exp) {
+                attendance = exp.attendance || 'Present';
+                remark = exp.attendanceRemark || exp.notes || 'Expense logged';
+                if (exp.clientSites && exp.clientSites.length > 0) {
+                    sites = exp.clientSites.map(cs => cs.siteId?.siteName || cs.ledger || 'Unknown Site');
+                } else {
+                    sites = ['—'];
+                }
+            } else if (scheds && scheds.length > 0) {
+                // Scheduled but no expense logged
+                if (dateStr === todayStr) {
+                    attendance = 'Present';
+                    remark = 'Scheduled today (No expense logged yet)';
+                } else if (currentDate > now) {
+                    attendance = 'Scheduled';
+                    remark = 'Scheduled future date';
+                } else {
+                    attendance = 'Absent';
+                    remark = 'Scheduled but no expense/attendance logged';
+                }
+                sites = scheds.map(s => s.site?.siteName || 'Unknown Site');
+            } else {
+                // No expense and no schedule
+                if (currentDate > now) {
+                    attendance = 'Pending';
+                    remark = 'Future date';
+                } else {
+                    attendance = 'Absent';
+                    remark = 'No work scheduled';
+                }
+                sites = ['—'];
+            }
+
+            dailyData.push({
+                date: dateStr,
+                dayName: currentDate.toLocaleDateString('en-US', { weekday: 'short' }),
+                attendance,
+                remark,
+                sites: sites.join(', ')
+            });
+        }
+
+        res.json({
+            success: true,
+            data: dailyData
+        });
+    } catch (error) {
+        console.error('Error in getAttendanceDetail:', error);
+        res.status(500).json({ success: false, message: error.message });
+    }
+};
+
 module.exports = {
     storeEmployeeMaster,
     updateEmployeeMaster,
@@ -609,5 +768,6 @@ module.exports = {
     getNextEmpId,
     deleteEmployeeMaster,
     updateMonthlyPayment,
-    getAttendanceSummary
+    getAttendanceSummary,
+    getAttendanceDetail
 };
