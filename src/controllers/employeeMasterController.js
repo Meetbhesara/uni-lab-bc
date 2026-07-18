@@ -525,16 +525,20 @@ const getAttendanceSummary = async (req, res) => {
         const endDate   = new Date(year, mon, 1);   // exclusive
 
         const EmployeeExpense = require('../models/EmployeeExpense');
+        const User = require('../models/User');
+        const AdminLoginLog = require('../models/AdminLoginLog');
 
         // Support lookup by _id or by empId string
         let employeeObjectId = null;
+        let empRecord = null;
         const mongoose = require('mongoose');
         if (mongoose.Types.ObjectId.isValid(id)) {
             employeeObjectId = new mongoose.Types.ObjectId(id);
+            empRecord = await EmployeeMaster.findById(employeeObjectId).lean();
         } else {
-            const emp = await EmployeeMaster.findOne({ empId: id });
-            if (!emp) return res.status(404).json({ success: false, message: 'Employee not found' });
-            employeeObjectId = emp._id;
+            empRecord = await EmployeeMaster.findOne({ empId: id }).lean();
+            if (!empRecord) return res.status(404).json({ success: false, message: 'Employee not found' });
+            employeeObjectId = empRecord._id;
         }
 
         const records = await EmployeeExpense.find({
@@ -551,22 +555,53 @@ const getAttendanceSummary = async (req, res) => {
             dayStatus: { $nin: ['Rejected', 'Skipped', 'Paused'] }
         }).select('scheduleDate operative helpers').lean();
 
-        const attMap = {};
+        // Check matching Admin logs if employee is linked to Admin account (Strict email matching only)
+        let matchingUserIds = [];
+        let matchedUser = null;
+        if (empRecord) {
+            if (empRecord.email && typeof empRecord.email === 'string' && empRecord.email.trim().length > 3) {
+                matchedUser = await User.findOne({ email: { $regex: new RegExp(`^${empRecord.email.trim()}$`, 'i') }, isAdmin: true }).select('_id createdAt').lean();
+            }
+            if (matchedUser) {
+                matchingUserIds = [matchedUser._id];
+            }
+        }
+
+        let adminLogs = [];
+        if (matchingUserIds.length > 0) {
+            adminLogs = await AdminLoginLog.find({
+                userId: { $in: matchingUserIds },
+                dateStr: { $regex: `^${month}-` }
+            }).select('dateStr').lean();
+        }
+
+        const getISTComp = (dateObj = new Date()) => {
+            const istDate = new Date(dateObj.getTime() + (5.5 * 60 * 60 * 1000));
+            return {
+                year: istDate.getUTCFullYear(),
+                month: istDate.getUTCMonth() + 1,
+                day: istDate.getUTCDate()
+            };
+        };
+        const istNow = getISTComp(new Date());
+        const todayStr = `${istNow.year}-${String(istNow.month).padStart(2, '0')}-${String(istNow.day).padStart(2, '0')}`;
+        const istEmp = empRecord?.createdAt ? getISTComp(new Date(empRecord.createdAt)) : { year: 2000, month: 1, day: 1 };
+        const empCreatedDateStr = `${istEmp.year}-${String(istEmp.month).padStart(2, '0')}-${String(istEmp.day).padStart(2, '0')}`;
+
+        const expenseMap = {};
         records.forEach(r => {
             if (r.date) {
-                const dateStr = new Date(r.date).toISOString().split('T')[0];
-                attMap[dateStr] = r.attendance || 'Present';
+                const c = getISTComp(new Date(r.date));
+                const dateStr = `${c.year}-${String(c.month).padStart(2, '0')}-${String(c.day).padStart(2, '0')}`;
+                expenseMap[dateStr] = r;
             }
         });
 
-        // Determine working days (any day with at least one schedule) and check if employee was scheduled
-        const workingDays = new Set();
         const employeeScheduledDays = new Set();
-
         allSchedules.forEach(s => {
             if (s.scheduleDate) {
-                const dateStr = new Date(s.scheduleDate).toISOString().split('T')[0];
-                workingDays.add(dateStr);
+                const c = getISTComp(new Date(s.scheduleDate));
+                const dateStr = `${c.year}-${String(c.month).padStart(2, '0')}-${String(c.day).padStart(2, '0')}`;
 
                 const opId = s.operative?._id || s.operative;
                 const isOp = opId && String(opId) === String(employeeObjectId);
@@ -581,37 +616,52 @@ const getAttendanceSummary = async (req, res) => {
             }
         });
 
-        // Fallback defaults for working days without explicit attendance records:
-        // - If scheduled: Present if today, Absent if past
-        // - If unscheduled: Absent
-        const todayStr = new Date().toISOString().split('T')[0];
-        workingDays.forEach(dateStr => {
-            if (!attMap[dateStr]) {
-                if (employeeScheduledDays.has(dateStr)) {
-                    if (dateStr === todayStr) {
-                        attMap[dateStr] = 'Present';
-                    } else {
-                        attMap[dateStr] = 'Absent';
-                    }
-                } else {
-                    attMap[dateStr] = 'Absent';
-                }
+        const adminLogDays = new Set();
+        adminLogs.forEach(l => {
+            if (l.dateStr) {
+                adminLogDays.add(l.dateStr);
+            } else if (l.loginTime) {
+                const c = getISTComp(new Date(l.loginTime));
+                const dateStr = `${c.year}-${String(c.month).padStart(2, '0')}-${String(c.day).padStart(2, '0')}`;
+                adminLogDays.add(dateStr);
             }
         });
 
-        let present = 0, absent = 0, halfDay = 0;
-        Object.values(attMap).forEach(att => {
-            if (att === 'Present') present++;
-            else if (att === 'Absent') absent++;
-            else if (att === 'Half Day') halfDay++;
-        });
+        const parts = month.split('-');
+        const yr = parseInt(parts[0], 10);
+        const mn = parseInt(parts[1], 10);
+        const daysInMonth = new Date(yr, mn, 0).getDate();
 
-        // Count of unique calendar days with any recorded or scheduled attendance
-        const totalRecorded = Object.keys(attMap).length;
+        let present = 0, absent = 0, halfDay = 0, pending = 0, totalRecorded = 0;
+
+        // Check all calendar days strictly
+        for (let d = 1; d <= daysInMonth; d++) {
+            const dateStr = `${yr}-${String(mn).padStart(2, '0')}-${String(d).padStart(2, '0')}`;
+            if (dateStr < empCreatedDateStr || dateStr > todayStr) {
+                continue;
+            }
+
+            let attendance = 'Absent';
+            if (expenseMap[dateStr]) {
+                attendance = expenseMap[dateStr].attendance || 'Present';
+            } else if (adminLogDays.has(dateStr)) {
+                attendance = 'Present';
+            } else if (employeeScheduledDays.has(dateStr)) {
+                attendance = 'Present';
+            } else {
+                attendance = 'Pending';
+            }
+
+            if (attendance === 'Present') present++;
+            else if (attendance === 'Absent') absent++;
+            else if (attendance === 'Half Day') halfDay++;
+            else if (attendance === 'Pending') pending++;
+            totalRecorded++;
+        }
 
         res.json({
             success: true,
-            data: { present, absent, halfDay, totalRecorded, month }
+            data: { present, absent, halfDay, pending, totalRecorded, month }
         });
     } catch (error) {
         console.error('Error in getAttendanceSummary:', error);
@@ -632,15 +682,19 @@ const getAttendanceDetail = async (req, res) => {
 
         const EmployeeExpense = require('../models/EmployeeExpense');
         const ScheduleMaster = require('../models/ScheduleMaster');
+        const User = require('../models/User');
+        const AdminLoginLog = require('../models/AdminLoginLog');
         const mongoose = require('mongoose');
 
         let employeeObjectId = null;
+        let empRecord = null;
         if (mongoose.Types.ObjectId.isValid(id)) {
             employeeObjectId = new mongoose.Types.ObjectId(id);
+            empRecord = await EmployeeMaster.findById(employeeObjectId).lean();
         } else {
-            const emp = await EmployeeMaster.findOne({ empId: id });
-            if (!emp) return res.status(404).json({ success: false, message: 'Employee not found' });
-            employeeObjectId = emp._id;
+            empRecord = await EmployeeMaster.findOne({ empId: id }).lean();
+            if (!empRecord) return res.status(404).json({ success: false, message: 'Employee not found' });
+            employeeObjectId = empRecord._id;
         }
 
         // Fetch expenses for this month and populate site details
@@ -651,11 +705,21 @@ const getAttendanceDetail = async (req, res) => {
         .populate('clientSites.siteId', 'siteName')
         .lean();
 
+        const getISTCompLocal = (dateObj = new Date()) => {
+            const istDate = new Date(dateObj.getTime() + (5.5 * 60 * 60 * 1000));
+            return {
+                year: istDate.getUTCFullYear(),
+                month: istDate.getUTCMonth() + 1,
+                day: istDate.getUTCDate()
+            };
+        };
+
         // Map expenses by date string (YYYY-MM-DD)
         const expenseMap = {};
         expenses.forEach(exp => {
             if (exp.date) {
-                const dateStr = new Date(exp.date).toISOString().split('T')[0];
+                const c = getISTCompLocal(new Date(exp.date));
+                const dateStr = `${c.year}-${String(c.month).padStart(2, '0')}-${String(c.day).padStart(2, '0')}`;
                 expenseMap[dateStr] = exp;
             }
         });
@@ -675,7 +739,8 @@ const getAttendanceDetail = async (req, res) => {
         const scheduleMap = {};
         schedules.forEach(s => {
             if (s.scheduleDate) {
-                const dateStr = new Date(s.scheduleDate).toISOString().split('T')[0];
+                const c = getISTCompLocal(new Date(s.scheduleDate));
+                const dateStr = `${c.year}-${String(c.month).padStart(2, '0')}-${String(c.day).padStart(2, '0')}`;
                 const opId = s.operative?._id || s.operative;
                 const isOp = opId && String(opId) === String(employeeObjectId);
                 const isHelper = (s.helpers || []).some(h => {
@@ -692,14 +757,53 @@ const getAttendanceDetail = async (req, res) => {
             }
         });
 
+        // Check matching Admin logs if employee is linked to Admin account (Strict email matching only)
+        let matchingUserIds = [];
+        let matchedUser = null;
+        if (empRecord) {
+            if (empRecord.email && typeof empRecord.email === 'string' && empRecord.email.trim().length > 3) {
+                matchedUser = await User.findOne({ email: { $regex: new RegExp(`^${empRecord.email.trim()}$`, 'i') }, isAdmin: true }).select('_id createdAt').lean();
+            }
+            if (matchedUser) {
+                matchingUserIds = [matchedUser._id];
+            }
+        }
+
+        let adminLogs = [];
+        if (matchingUserIds.length > 0) {
+            adminLogs = await AdminLoginLog.find({
+                userId: { $in: matchingUserIds },
+                dateStr: { $regex: `^${month}-` }
+            }).sort({ loginAt: 1 }).lean();
+        }
+
+        const adminLogMap = {};
+        adminLogs.forEach(l => {
+            if (l.dateStr) {
+                if (!adminLogMap[l.dateStr]) adminLogMap[l.dateStr] = [];
+                adminLogMap[l.dateStr].push(l);
+            }
+        });
+
         // Generate day-by-day list
         const daysInMonth = new Date(year, mon, 0).getDate();
         const dailyData = [];
-        const todayStr = new Date().toISOString().split('T')[0];
+        const getISTComp = (dateObj = new Date()) => {
+            const istDate = new Date(dateObj.getTime() + (5.5 * 60 * 60 * 1000));
+            return {
+                year: istDate.getUTCFullYear(),
+                month: istDate.getUTCMonth() + 1,
+                day: istDate.getUTCDate()
+            };
+        };
+        const istNow = getISTComp(new Date());
+        const todayStr = `${istNow.year}-${String(istNow.month).padStart(2, '0')}-${String(istNow.day).padStart(2, '0')}`;
+        const istEmp = empRecord?.createdAt ? getISTComp(new Date(empRecord.createdAt)) : { year: 2000, month: 1, day: 1 };
+        const empCreatedDateStr = `${istEmp.year}-${String(istEmp.month).padStart(2, '0')}-${String(istEmp.day).padStart(2, '0')}`;
 
         for (let d = 1; d <= daysInMonth; d++) {
             const currentDate = new Date(year, mon - 1, d);
-            const dateStr = currentDate.toISOString().split('T')[0];
+            const dateStr = `${year}-${String(mon).padStart(2, '0')}-${String(d).padStart(2, '0')}`;
 
             let attendance = 'Absent';
             let remark = 'No schedule or expense logged';
@@ -707,8 +811,17 @@ const getAttendanceDetail = async (req, res) => {
 
             const exp = expenseMap[dateStr];
             const scheds = scheduleMap[dateStr];
+            const aLogs = adminLogMap[dateStr];
 
-            if (exp) {
+            if (dateStr < empCreatedDateStr) {
+                attendance = 'Not Joined';
+                remark = 'Joined on ' + new Date(empRecord.createdAt).toLocaleDateString('en-GB');
+                sites = ['—'];
+            } else if (dateStr > todayStr) {
+                attendance = 'Pending';
+                remark = 'Future date';
+                sites = ['—'];
+            } else if (exp) {
                 attendance = exp.attendance || 'Present';
                 remark = exp.attendanceRemark || exp.notes || 'Expense logged';
                 if (exp.clientSites && exp.clientSites.length > 0) {
@@ -716,28 +829,38 @@ const getAttendanceDetail = async (req, res) => {
                 } else {
                     sites = ['—'];
                 }
+                if (aLogs && aLogs.length > 0) {
+                    remark += ` (Plus Admin Login)`;
+                }
+            } else if (aLogs && aLogs.length > 0) {
+                attendance = 'Present';
+                const formatT = (dt) => {
+                    if (!dt) return '-';
+                    return new Date(dt).toLocaleTimeString('en-IN', { timeZone: 'Asia/Kolkata', hour: '2-digit', minute: '2-digit', hour12: true });
+                };
+                const firstLog = aLogs[0];
+                const latestLog = aLogs[aLogs.length - 1];
+                let outStr = latestLog.logoutAt ? formatT(latestLog.logoutAt) : (dateStr === todayStr ? 'Active (Logged In)' : formatT(latestLog.lastActiveAt || latestLog.loginAt));
+                remark = `Admin Portal Login (In: ${formatT(firstLog.loginAt)}, Out: ${outStr})`;
+                if (scheds && scheds.length > 0) {
+                    sites = scheds.map(s => s.site?.siteName || 'Unknown Site');
+                } else {
+                    sites = ['Admin Dashboard'];
+                }
             } else if (scheds && scheds.length > 0) {
-                // Scheduled but no expense logged
-                if (dateStr === todayStr) {
-                    attendance = 'Present';
-                    remark = 'Scheduled today (No expense logged yet)';
-                } else if (currentDate > now) {
-                    attendance = 'Scheduled';
-                    remark = 'Scheduled future date';
-                } else {
-                    attendance = 'Absent';
-                    remark = 'Scheduled but no expense/attendance logged';
-                }
+                // Scheduled but no expense logged -> show as Present as requested
+                attendance = 'Present';
+                remark = dateStr === todayStr ? 'Scheduled today (No expense logged yet)' : 'Scheduled duty (No separate expense report)';
                 sites = scheds.map(s => s.site?.siteName || 'Unknown Site');
+            } else if (dateStr === todayStr) {
+                // Today: if not scheduled, not admin logged in, and no expense marked yet -> Pending
+                attendance = 'Pending';
+                remark = 'Today (No schedule or expense logged yet)';
+                sites = ['—'];
             } else {
-                // No expense and no schedule
-                if (currentDate > now) {
-                    attendance = 'Pending';
-                    remark = 'Future date';
-                } else {
-                    attendance = 'Absent';
-                    remark = 'No work scheduled';
-                }
+                // Past date: no expense and no schedule -> Pending
+                attendance = 'Pending';
+                remark = 'No schedule or expense logged yet';
                 sites = ['—'];
             }
 

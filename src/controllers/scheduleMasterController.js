@@ -6,6 +6,15 @@ const mongoose = require('mongoose');
 const path = require('path');
 const { broadcast } = require('../utils/sseManager');
 
+const getIstDateRange = (dateInput) => {
+    const d = new Date(dateInput);
+    const istDateString = d.toLocaleDateString('en-US', { timeZone: 'Asia/Kolkata' });
+    const [month, day, year] = istDateString.split('/');
+    const start = new Date(Date.UTC(Number(year), Number(month) - 1, Number(day), 0, 0, 0, 0) - 5.5 * 60 * 60 * 1000);
+    const end = new Date(start.getTime() + 24 * 60 * 60 * 1000 - 1);
+    return { start, end };
+};
+
 // POST - Create a new schedule
 const createSchedule = async (req, res) => {
     try {
@@ -75,7 +84,7 @@ const createSchedule = async (req, res) => {
         await schedule.save();
         const populated = await ScheduleMaster.findById(schedule._id)
             .populate('client', 'clientName clientId')
-            .populate('site', 'siteName siteId siteAddress ledgerItems')
+            .populate('site', 'siteName siteId siteAddress stateName stateCode ledgerItems')
             .populate('operative', 'name phone')
             .populate('helpers', 'name phone')
             .populate('vehicle', 'vehicleNumber vehicleName')
@@ -142,10 +151,7 @@ const updateSchedule = async (req, res) => {
                 }
 
                 if (operativeChanged || helpersChanged) {
-                    const startOfDay = new Date(existingSchedule.scheduleDate);
-                    startOfDay.setUTCHours(0, 0, 0, 0);
-                    const endOfDay = new Date(startOfDay);
-                    endOfDay.setUTCDate(endOfDay.getUTCDate() + 1);
+                    const { start: startOfDay, end: endOfDay } = getIstDateRange(existingSchedule.scheduleDate);
 
                     const scheduleIdStr = String(existingSchedule._id);
 
@@ -211,11 +217,8 @@ const updateSchedule = async (req, res) => {
 
             if (existingSchedule && isActualChange) {
                 try {
-                    // Build a strict 24-hour UTC range for the schedule date
-                    const startOfDay = new Date(existingSchedule.scheduleDate);
-                    startOfDay.setUTCHours(0, 0, 0, 0);
-                    const endOfDay = new Date(startOfDay);
-                    endOfDay.setUTCDate(endOfDay.getUTCDate() + 1);
+                    // Build a strict 24-hour IST range for the schedule date
+                    const { start: startOfDay, end: endOfDay } = getIstDateRange(existingSchedule.scheduleDate);
 
                     const scheduleIdStr = String(id);
                     const siteIdStr = String(existingSchedule.site);
@@ -324,7 +327,7 @@ const updateSchedule = async (req, res) => {
             { new: true, runValidators: false }
         )
             .populate('client', 'clientName clientId')
-            .populate('site', 'siteName siteId siteAddress ledgerItems')
+            .populate('site', 'siteName siteId siteAddress stateName stateCode ledgerItems')
             .populate('operative', 'name phone')
             .populate('helpers', 'name phone')
             .populate('vehicle', 'vehicleNumber vehicleName')
@@ -540,8 +543,8 @@ const getSchedules = async (req, res) => {
         filter.dayStatus = { $ne: 'Skipped' };
 
         const schedules = await ScheduleMaster.find(filter)
-            .populate('client', 'clientName clientId')
-            .populate('site', 'siteName siteId siteAddress ledgerItems')
+            .populate('client', 'clientName clientId clientAddress gstNo state contactPerson contactNumbers')
+            .populate('site', 'siteName siteId siteAddress stateName stateCode ledgerItems contactPersons contactPhone')
             .populate('operative', 'name phone')
             .populate('helpers', 'name phone')
             .populate('vehicle', 'vehicleNumber vehicleName')
@@ -555,15 +558,47 @@ const getSchedules = async (req, res) => {
 
         for (let s of schedules) {
             let docs = [];
+            let foundExpenseQty = null;
+            let hasExpensesFlag = false;
             
             // Collect any documents attached directly to the site or schedule via completeSchedule modal
             if (s.site?.documents) {
                 docs.push(...s.site.documents);
             }
             
-            // Collect documents uploaded via Employee Expenses (Daily Report)
+            // Collect documents and updated quantity from Employee Expenses
             expenses.forEach(e => {
                 const cs = e.clientSites.find(c => String(c.scheduleId) === String(s._id));
+                if (cs) {
+                    if (Number(cs.quantity) > 0) {
+                        foundExpenseQty = Number(cs.quantity);
+                    }
+
+                    const hasFiles = cs.files && (
+                        (cs.files.photos && cs.files.photos.length > 0) ||
+                        (cs.files.dailyReports && cs.files.dailyReports.length > 0) ||
+                        (cs.files.data && cs.files.data.length > 0) ||
+                        (cs.files.drawing && cs.files.drawing.length > 0)
+                    );
+
+                    const hasExp = (
+                        (Number(e.expenses?.breakfast) || 0) > 0 ||
+                        (Number(e.expenses?.lunch) || 0) > 0 ||
+                        (Number(e.expenses?.dinner) || 0) > 0 ||
+                        (Number(e.expenses?.petrol) || 0) > 0 ||
+                        (e.otherExpensesList && e.otherExpensesList.length > 0) ||
+                        (cs.allocatedExpense > 0) ||
+                        (cs.allocatedCredit > 0) ||
+                        (e.photos && e.photos.length > 0) ||
+                        (e.dataFiles && e.dataFiles.length > 0) ||
+                        (e.dailyReports && e.dailyReports.length > 0)
+                    );
+
+                    if (hasFiles || hasExp) {
+                        hasExpensesFlag = true;
+                    }
+                }
+
                 if (cs && cs.files) {
                     ['photos', 'dailyReports', 'data', 'drawing'].forEach(cat => {
                         if (cs.files[cat]) {
@@ -595,7 +630,32 @@ const getSchedules = async (req, res) => {
                 }
             });
             
+            // Also check if drafting files are present on the schedule itself
+            if (s.draftingWorkFiles) {
+                const dwf = s.draftingWorkFiles;
+                const hasDraftingFiles = 
+                    (dwf.collectedFiles && dwf.collectedFiles.length > 0) ||
+                    (dwf.convertedFiles && dwf.convertedFiles.length > 0) ||
+                    (dwf.liningDrawFiles && dwf.liningDrawFiles.length > 0) ||
+                    (dwf.esurveyWorkFiles && dwf.esurveyWorkFiles.length > 0) ||
+                    (dwf.finalCheckingFiles && dwf.finalCheckingFiles.length > 0) ||
+                    (dwf.mailFiles && dwf.mailFiles.length > 0);
+
+                if (hasDraftingFiles) {
+                    hasExpensesFlag = true;
+                }
+            }
+            
+            // Strictly use ScheduleMaster ledger (do not overwrite with Employee Expense ledger)
+            if (!s.ledger || s.ledger.trim() === '') {
+                s.ledger = 'Visit';
+            }
+            if (foundExpenseQty !== null) {
+                s.quantity = foundExpenseQty;
+            }
+
             s.uploadedDocuments = docs;
+            s.hasExpenses = hasExpensesFlag;
         }
 
         res.json({ success: true, data: schedules });
@@ -614,7 +674,7 @@ const getSitesByClient = async (req, res) => {
         const sites = await SiteMaster.find({ 
             client: new mongoose.Types.ObjectId(clientId),
             status: 'Active' 
-        }).select('siteName siteAddress contactPersons contactPhone ledgerItems');
+        }).select('siteName siteAddress stateName stateCode contactPersons contactPhone ledgerItems');
 
         console.log(`Found ${sites.length} sites for client ${clientId}`);
 
@@ -695,6 +755,77 @@ const rejectSchedule = async (req, res) => {
         if (!schedule) {
             return res.status(404).json({ success: false, message: 'Schedule not found' });
         }
+
+        // -------------------------------------------------------------------------
+        // RESTRICTION: Do not allow rejecting a schedule if daily expenses
+        // or client/site data (photos, report, drawing, data) already exist.
+        // -------------------------------------------------------------------------
+        const { start: startOfDay, end: endOfDay } = getIstDateRange(schedule.scheduleDate);
+
+        const scheduleIdStr = String(schedule._id);
+
+        // Find any EmployeeExpense documents for the schedule's date that refer to this schedule ID
+        const associatedExpenses = await EmployeeExpense.find({
+            date: { $gte: startOfDay, $lte: endOfDay },
+            "clientSites.scheduleId": schedule._id
+        });
+
+        for (const exp of associatedExpenses) {
+            const isRelated = (schedule.operative && String(exp.employeeId) === String(schedule.operative)) ||
+                              (schedule.helpers && schedule.helpers.some(h => String(h) === String(exp.employeeId)));
+
+            if (isRelated) {
+                const cs = exp.clientSites.find(c => String(c.scheduleId) === scheduleIdStr);
+                if (cs) {
+                    const hasFiles = cs.files && (
+                        (cs.files.photos && cs.files.photos.length > 0) ||
+                        (cs.files.dailyReports && cs.files.dailyReports.length > 0) ||
+                        (cs.files.data && cs.files.data.length > 0) ||
+                        (cs.files.drawing && cs.files.drawing.length > 0)
+                    );
+
+                    const hasExpenses = (
+                        (Number(exp.expenses?.breakfast) || 0) > 0 ||
+                        (Number(exp.expenses?.lunch) || 0) > 0 ||
+                        (Number(exp.expenses?.dinner) || 0) > 0 ||
+                        (Number(exp.expenses?.petrol) || 0) > 0 ||
+                        (exp.otherExpensesList && exp.otherExpensesList.length > 0) ||
+                        (cs.allocatedExpense > 0) ||
+                        (cs.allocatedCredit > 0) ||
+                        (exp.photos && exp.photos.length > 0) ||
+                        (exp.dataFiles && exp.dataFiles.length > 0) ||
+                        (exp.dailyReports && exp.dailyReports.length > 0)
+                    );
+
+                    if (hasFiles || hasExpenses) {
+                        return res.status(400).json({
+                            success: false,
+                            message: 'Cannot reject schedule because daily expenses, photos, daily reports, project data, or drawings are present. Delete them first.'
+                        });
+                    }
+                }
+            }
+        }
+
+        // Also check if drafting files are present on the schedule itself
+        if (schedule.draftingWorkFiles) {
+            const dwf = schedule.draftingWorkFiles;
+            const hasDraftingFiles = 
+                (dwf.collectedFiles && dwf.collectedFiles.length > 0) ||
+                (dwf.convertedFiles && dwf.convertedFiles.length > 0) ||
+                (dwf.liningDrawFiles && dwf.liningDrawFiles.length > 0) ||
+                (dwf.esurveyWorkFiles && dwf.esurveyWorkFiles.length > 0) ||
+                (dwf.finalCheckingFiles && dwf.finalCheckingFiles.length > 0) ||
+                (dwf.mailFiles && dwf.mailFiles.length > 0);
+
+            if (hasDraftingFiles) {
+                return res.status(400).json({
+                    success: false,
+                    message: 'Cannot reject schedule because drawing or drafting files are present on this schedule. Delete them first.'
+                });
+            }
+        }
+
         schedule.dayStatus = 'Rejected';
         await schedule.save({ validateBeforeSave: false });
 
@@ -706,20 +837,221 @@ const rejectSchedule = async (req, res) => {
     }
 };
 
-// PATCH - Update invoice status (Pending <-> Completed)
+// PATCH - Update invoice status with optional tracking fields
 const updateInvoiceStatus = async (req, res) => {
     try {
         const { id } = req.params;
-        const { invoiceStatus } = req.body;
-        if (!['Pending', 'Completed'].includes(invoiceStatus)) {
+        const { invoiceStatus, invoiceDetails, proformaInvoiceId, finalInvoiceId } = req.body;
+        if (!['Pending', 'Completed', 'Proforma', 'Final', 'Closed'].includes(invoiceStatus)) {
             return res.status(400).json({ success: false, message: 'Invalid invoice status' });
         }
-        await ScheduleMaster.updateOne({ _id: id }, { $set: { invoiceStatus } });
+
+        // Block moving Proforma / Final / Closed back to Pending (One-way progression strictly enforced)
+        if (invoiceStatus === 'Pending') {
+            const entry = await ScheduleMaster.findById(id).select('invoiceStatus');
+            if (entry && ['Proforma', 'Final', 'Closed'].includes(entry.invoiceStatus)) {
+                return res.status(409).json({
+                    success: false,
+                    message: `Cannot revert "${entry.invoiceStatus}" invoice back to Pending status.`
+                });
+            }
+        }
+
+        const updateObj = { invoiceStatus };
+        if (invoiceDetails !== undefined) updateObj.invoiceDetails = invoiceDetails;
+        if (proformaInvoiceId !== undefined) updateObj.proformaInvoiceId = proformaInvoiceId;
+        if (finalInvoiceId !== undefined) updateObj.finalInvoiceId = finalInvoiceId;
+        await ScheduleMaster.updateOne({ _id: id }, { $set: updateObj });
         res.json({ success: true, message: `Invoice marked as ${invoiceStatus}` });
     } catch (error) {
         res.status(500).json({ success: false, message: error.message });
     }
 };
+
+/**
+ * POST /schedule-master/generate-invoice
+ * Generate ONE Proforma or Final invoice for multiple scheduler entries.
+ *
+ * Business Rules:
+ *   - Multiple entries → ONE merged invoice (single invoiceId shared across all)
+ *   - Pending/Completed → Proforma or Final
+ *   - Proforma → Final (upgrade path)
+ *   - Proforma → Proforma / Final → Final (allow editing invoice details inside same stage)
+ *   - Duplicate guard: entries in Final cannot be moved to Proforma, Closed entries cannot be edited
+ *
+ * NOTE: No MongoDB session/transaction used — requires standalone MongoDB compatible.
+ */
+const getInvoiceDirectory = (invoiceType) => {
+    const path = require('path');
+    const fs = require('fs');
+    const useNas = process.env.USE_NAS === 'true';
+    let baseDir;
+    if (useNas) {
+        let nasBase = process.env.NAS_BASE_PATH || '/app/storage';
+        if (!nasBase.startsWith('/')) nasBase = '/' + nasBase;
+        baseDir = nasBase;
+    } else {
+        const localBase = process.env.LOCAL_BASE_PATH || './uploads';
+        baseDir = path.isAbsolute(localBase) ? localBase : path.join(__dirname, '..', '..', localBase.replace('./', ''));
+    }
+    
+    const subFolder = invoiceType.toLowerCase().includes('proforma') || invoiceType.toLowerCase().includes('perfoma')
+        ? 'perfoma'
+        : 'final';
+        
+    const invoiceDir = path.join(baseDir, 'invoice', subFolder);
+    if (!fs.existsSync(invoiceDir)) {
+        fs.mkdirSync(invoiceDir, { recursive: true });
+    }
+    return { invoiceDir, subFolder };
+};
+
+const generateSchedulerInvoice = async (req, res) => {
+    try {
+        const {
+            entryIds,       // array of ScheduleMaster._id strings
+            invoiceType,    // 'proforma' | 'final'
+            invoiceDetails, // the full PDF form data object
+            invoiceId,      // client-generated unique invoice ID (e.g. PRM/0001 or UE/2026-27/0001)
+            pdfHtml         // pre-rendered HTML content for PDF generation
+        } = req.body;
+
+        // ── Validation ────────────────────────────────────────────────────
+        if (!entryIds || !Array.isArray(entryIds) || entryIds.length === 0) {
+            return res.status(400).json({ success: false, message: 'entryIds array is required and must not be empty' });
+        }
+        if (!['proforma', 'final'].includes(invoiceType)) {
+            return res.status(400).json({ success: false, message: 'invoiceType must be "proforma" or "final"' });
+        }
+        if (!invoiceId) {
+            return res.status(400).json({ success: false, message: 'invoiceId is required' });
+        }
+
+        // ── Fetch all target entries ───────────────────────────────────────
+        const entries = await ScheduleMaster.find({ _id: { $in: entryIds } });
+
+        if (entries.length !== entryIds.length) {
+            return res.status(404).json({
+                success: false,
+                message: `Some entries not found. Expected ${entryIds.length}, found ${entries.length}.`
+            });
+        }
+
+        // ── Business Rule Guard ────────────────────────────────────────────
+        const targetStatus = invoiceType === 'proforma' ? 'Proforma' : 'Final';
+
+        for (const entry of entries) {
+            const currentStatus = (entry.invoiceStatus || 'Pending').toLowerCase();
+
+            if (invoiceType === 'proforma') {
+                // Allow generating from pending/completed, OR updating an already existing Proforma
+                if (!['pending', 'completed', 'proforma'].includes(currentStatus)) {
+                    return res.status(409).json({
+                        success: false,
+                        message: `Entry dated "${entry.scheduleDate}" is in "${entry.invoiceStatus}" status and cannot be modified as Proforma.`
+                    });
+                }
+            }
+
+            if (invoiceType === 'final') {
+                // Allow generating from pending/completed/proforma, OR updating an existing Final
+                if (currentStatus === 'closed') {
+                    return res.status(409).json({
+                        success: false,
+                        message: `Entry dated "${entry.scheduleDate}" is Closed and cannot be re-invoiced or edited.`
+                    });
+                }
+                if (!['pending', 'completed', 'proforma', 'final'].includes(currentStatus)) {
+                    return res.status(409).json({
+                        success: false,
+                        message: `Entry dated "${entry.scheduleDate}" is in "${entry.invoiceStatus}" status and cannot be modified as Final Invoice.`
+                    });
+                }
+            }
+        }
+
+        // ── PDF Generation (if pdfHtml is passed) ──────────────────────────
+        let pdfUrl = null;
+        if (pdfHtml) {
+            const puppeteer = require('puppeteer');
+            const path = require('path');
+            const sanitizedInvoiceId = invoiceId.replace(/[^a-zA-Z0-9-_]/g, '_');
+            const { invoiceDir, subFolder } = getInvoiceDirectory(invoiceType);
+            const fileName = `${sanitizedInvoiceId}.pdf`;
+            const absolutePdfPath = path.join(invoiceDir, fileName);
+
+            console.log(`[Puppeteer] Generating invoice PDF at: ${absolutePdfPath}`);
+            let browser;
+            try {
+                browser = await puppeteer.launch({ 
+                    headless: 'new',
+                    args: ['--no-sandbox', '--disable-setuid-sandbox'] 
+                });
+                const page = await browser.newPage();
+                await page.setContent(pdfHtml, { waitUntil: 'networkidle0' });
+                await new Promise(resolve => setTimeout(resolve, 1000)); // wait a bit for layout/fonts
+
+                await page.pdf({ 
+                    path: absolutePdfPath, 
+                    format: 'A4',
+                    printBackground: true,
+                    preferCSSPageSize: true
+                });
+                await browser.close();
+                console.log(`[Puppeteer] Invoice PDF generated successfully.`);
+                pdfUrl = `/uploads/invoice/${subFolder}/${fileName}`;
+            } catch (err) {
+                if (browser) await browser.close();
+                console.error('[Puppeteer] Error generating invoice PDF:', err);
+            }
+        }
+
+        // ── Bulk Update ────────────────────────────────────────────────────
+        const cleanDetails = { ...(invoiceDetails || {}) };
+        delete cleanDetails.selectedEntries;
+        delete cleanDetails.group;
+        delete cleanDetails.isExistingInvoice;
+        delete cleanDetails.isEditingInvoice;
+
+        if (pdfUrl) {
+            cleanDetails.pdfUrl = pdfUrl;
+        }
+
+        const updateFields = {
+            invoiceStatus: targetStatus,
+            invoiceDetails: cleanDetails,
+            invoiceLockedAt: new Date()
+        };
+
+        if (invoiceType === 'proforma') {
+            updateFields.proformaInvoiceId = invoiceId;
+            if (pdfUrl) {
+                updateFields.proformaInvoicePdf = pdfUrl;
+            }
+        } else {
+            updateFields.finalInvoiceId = invoiceId;
+            if (pdfUrl) {
+                updateFields.finalInvoicePdf = pdfUrl;
+            }
+        }
+
+        await ScheduleMaster.updateMany(
+            { _id: { $in: entryIds } },
+            { $set: updateFields }
+        );
+
+        res.json({
+            success: true,
+            message: `Successfully generated ${invoiceType} invoice "${invoiceId}" for ${entryIds.length} entr${entryIds.length === 1 ? 'y' : 'ies'}.`,
+            data: { invoiceId, invoiceType, targetStatus, affectedCount: entryIds.length, pdfUrl }
+        });
+
+    } catch (error) {
+        console.error('[generateSchedulerInvoice] Error:', error);
+        res.status(500).json({ success: false, message: error.message });
+    }
+};
+
 
 const pauseMonth = async (req, res) => {
     try {
@@ -1018,6 +1350,7 @@ const deleteSchedule = async (req, res) => {
 };
 
 
+
 module.exports = {
     createSchedule,
     updateSchedule,
@@ -1026,6 +1359,7 @@ module.exports = {
     completeSchedule,
     rejectSchedule,
     updateInvoiceStatus,
+    generateSchedulerInvoice,
     pauseMonth,
     resumeMonth,
     endMonth,

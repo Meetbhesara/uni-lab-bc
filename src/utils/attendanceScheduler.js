@@ -62,25 +62,40 @@ const autoMarkAbsentForDate = async (dateObj) => {
         });
         
         const User = require('../models/User');
-        const adminUsers = await User.find({ isAdmin: true }).select('email').lean();
-        const adminEmailSet = new Set(
-            adminUsers
-                .map(u => (u.email && typeof u.email === 'string') ? u.email.toLowerCase().trim() : '')
-                .filter(Boolean)
-        );
+        const AdminLoginLog = require('../models/AdminLoginLog');
+        const adminUsers = await User.find({ isAdmin: true }).select('_id email phone').lean();
+        const adminEmailMap = {};
+        const adminPhoneMap = {};
+        adminUsers.forEach(u => {
+            if (u.email && typeof u.email === 'string' && u.email.trim().length > 3) adminEmailMap[u.email.toLowerCase().trim()] = String(u._id);
+            if (u.phone && String(u.phone).trim().length > 5) adminPhoneMap[String(u.phone).trim()] = String(u._id);
+        });
+
+        // Check which admins logged in on this exact date
+        const dateStr = `${year}-${String(month + 1).padStart(2, '0')}-${String(day).padStart(2, '0')}`;
+        const adminLogs = await AdminLoginLog.find({ dateStr }).select('userId').lean();
+        const loggedInUserIds = new Set(adminLogs.map(l => String(l.userId)).filter(Boolean));
 
         let count = 0;
         for (const emp of activeEmployees) {
             const empIdStr = String(emp._id);
+            const empCreatedDateStr = emp.createdAt ? new Date(emp.createdAt).toISOString().split('T')[0] : '2000-01-01';
+            if (dateStr < empCreatedDateStr) {
+                continue; // Do not auto-mark absent for dates before employee joining/creation date
+            }
             
-            // Bypass employees who ARE scheduled on this date
+            // Bypass employees who ARE scheduled on this date (they are marked Present or handled via schedule)
             if (scheduledEmployeeIds.has(empIdStr)) {
                 continue;
             }
 
-            // Bypass employees whose email is linked to an Admin user account
+            // Check if employee is linked to an Admin user account
             const empEmail = (emp.email && typeof emp.email === 'string') ? emp.email.toLowerCase().trim() : '';
-            if (empEmail && adminEmailSet.has(empEmail)) {
+            const empPhone = emp.phone ? String(emp.phone).trim() : '';
+            const matchedUserId = (empEmail && empEmail.length > 3 && adminEmailMap[empEmail]) || (!empEmail && empPhone && empPhone.length > 5 && adminPhoneMap[empPhone]);
+
+            // If employee is an Admin AND logged into the admin portal today -> mark Present (bypass auto-absent)
+            if (matchedUserId && loggedInUserIds.has(matchedUserId)) {
                 continue;
             }
             

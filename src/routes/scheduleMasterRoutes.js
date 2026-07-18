@@ -11,6 +11,7 @@ const {
     rejectSchedule,
     getSitesByClient,
     updateInvoiceStatus,
+    generateSchedulerInvoice,
     pauseMonth,
     resumeMonth,
     endMonth,
@@ -18,6 +19,7 @@ const {
     deleteDraftingWorkFile,
     deleteSchedule
 } = require('../controllers/scheduleMasterController');
+
 
 // --- Multer Storage for Completion Files ---
 const storage = multer.diskStorage({
@@ -97,6 +99,10 @@ router.put('/reject/:id', rejectSchedule);
 
 // PATCH /api/schedule-master/invoice-status/:id (Update invoice bill status)
 router.patch('/invoice-status/:id', updateInvoiceStatus);
+
+// POST /api/schedule-master/generate-invoice (Generate Proforma or Final invoice atomically for multiple entries)
+router.post('/generate-invoice', generateSchedulerInvoice);
+
 
 // DELETE /api/schedule-master/pause-month/:client/:site/:monthGroupId (Pause month schedule)
 router.delete('/pause-month/:client/:site/:monthGroupId', pauseMonth);

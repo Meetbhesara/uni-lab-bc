@@ -38,6 +38,18 @@ const ClientMasterSchema = new mongoose.Schema({
         type: String,
         trim: true
     },
+    pincode: {
+        type: String,
+        trim: true
+    },
+    state: {
+        type: String,
+        trim: true
+    },
+    contactNumbers: {
+        type: [String],
+        default: []
+    },
     gstNo: {
         type: String,
         trim: true

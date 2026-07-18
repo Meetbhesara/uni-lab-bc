@@ -2,10 +2,28 @@ const mongoose = require('mongoose');
 const EmployeeTransfer = require('../models/EmployeeTransfer');
 const EmployeeLedger = require('../models/EmployeeLedger');
 const EmployeeMaster = require('../models/EmployeeMaster');
+const MoneyTransferAccount = require('../models/MoneyTransferAccount');
 const { sendWhatsapp } = require('../utils/whatsappService');
 
 // Helper: pause between bulk messages to avoid WhatsApp rate-limiting
 const delay = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
+
+const updateBalanceHelper = async (id, deltaAmount, session) => {
+    if (!id) return;
+    const emp = await EmployeeMaster.findByIdAndUpdate(id, { $inc: { totalAmount: deltaAmount } }, { session });
+    if (!emp) {
+        await MoneyTransferAccount.findByIdAndUpdate(id, { $inc: { totalAmount: deltaAmount } }, { session });
+    }
+};
+
+const getEntityNamePhone = async (id) => {
+    if (!id) return null;
+    let doc = await EmployeeMaster.findById(id).select('name phone');
+    if (!doc) {
+        doc = await MoneyTransferAccount.findById(id).select('name');
+    }
+    return doc;
+};
 
 exports.createTransfer = async (req, res) => {
     const session = await mongoose.startSession();
@@ -30,8 +48,8 @@ exports.createTransfer = async (req, res) => {
         await transfer.save({ session });
 
         // Update Balances
-        await EmployeeMaster.findByIdAndUpdate(giver, { $inc: { totalAmount: -amount } }, { session });
-        await EmployeeMaster.findByIdAndUpdate(taker, { $inc: { totalAmount: amount } }, { session });
+        await updateBalanceHelper(giver, -amount, session);
+        await updateBalanceHelper(taker, amount, session);
 
         const transferDate = date ? new Date(date) : new Date();
 
@@ -42,7 +60,7 @@ exports.createTransfer = async (req, res) => {
             amount,
             type: 'Debit',
             category: 'Transfer',
-            description: notes || 'Direct Transfer to Employee',
+            description: notes || 'Direct Transfer to Account/Employee',
             relatedEmployee: taker,
             referenceId: transfer._id
         }).save({ session });
@@ -54,7 +72,7 @@ exports.createTransfer = async (req, res) => {
             amount,
             type: 'Credit',
             category: 'Transfer',
-            description: notes || 'Direct Transfer from Employee',
+            description: notes || 'Direct Transfer from Account/Employee',
             relatedEmployee: giver,
             referenceId: transfer._id
         }).save({ session });
@@ -63,11 +81,10 @@ exports.createTransfer = async (req, res) => {
         session.endSession();
 
         // ── WhatsApp Notification to Receiver (Taker) ───────────────────────
-        // Fetch full details of giver & taker for the message
         try {
             const [giverDoc, takerDoc] = await Promise.all([
-                EmployeeMaster.findById(giver).select('name phone'),
-                EmployeeMaster.findById(taker).select('name phone')
+                getEntityNamePhone(giver),
+                getEntityNamePhone(taker)
             ]);
 
             if (takerDoc && takerDoc.phone) {
@@ -76,7 +93,7 @@ exports.createTransfer = async (req, res) => {
                 });
                 const msg =
                     `💸 *Money Transfer Received!*\n\n` +
-                    `*Sender:* *${giverDoc?.name || 'Employee'}*\n` +
+                    `*Sender:* *${giverDoc?.name || 'Account'}*\n` +
                     `*Receiver:* *${takerDoc.name}*\n` +
                     `*Amount:* *₹${Number(amount).toLocaleString('en-IN')}*\n` +
                     `*Date:* ${formattedDate}`;
@@ -84,10 +101,8 @@ exports.createTransfer = async (req, res) => {
                 await sendWhatsapp(takerDoc.phone, msg, req.user?.id);
             }
         } catch (wpErr) {
-            // WhatsApp failure must NOT roll back the transfer
             console.error('[Transfer] WhatsApp notification failed (non-critical):', wpErr.message);
         }
-        // ────────────────────────────────────────────────────────────────────
 
         res.status(201).json({ success: true, message: 'Transfer recorded successfully', data: transfer });
     } catch (error) {
@@ -124,8 +139,8 @@ exports.bulkCreateTransfers = async (req, res) => {
             await transfer.save({ session });
 
             // Update Balances
-            await EmployeeMaster.findByIdAndUpdate(giver, { $inc: { totalAmount: -amount } }, { session });
-            await EmployeeMaster.findByIdAndUpdate(taker, { $inc: { totalAmount: amount } }, { session });
+            await updateBalanceHelper(giver, -amount, session);
+            await updateBalanceHelper(taker, amount, session);
 
             const transferDate = date ? new Date(date) : new Date();
 
@@ -156,15 +171,13 @@ exports.bulkCreateTransfers = async (req, res) => {
         session.endSession();
 
         // ── WhatsApp Notifications (sent after commit, one-by-one with delay) ──
-        // A 1.2-second gap between each message prevents WhatsApp from flagging
-        // the account as spam, even for 10-15 receivers in a single bulk action.
         try {
             for (const item of transfers) {
                 const { giver, taker, amount, date, notes } = item;
                 try {
                     const [giverDoc, takerDoc] = await Promise.all([
-                        EmployeeMaster.findById(giver).select('name phone'),
-                        EmployeeMaster.findById(taker).select('name phone')
+                        getEntityNamePhone(giver),
+                        getEntityNamePhone(taker)
                     ]);
 
                     if (takerDoc && takerDoc.phone) {
@@ -173,25 +186,22 @@ exports.bulkCreateTransfers = async (req, res) => {
                         });
                         const msg =
                             `💸 *Money Transfer Received!*\n\n` +
-                            `*Sender:* *${giverDoc?.name || 'Employee'}*\n` +
+                            `*Sender:* *${giverDoc?.name || 'Account'}*\n` +
                             `*Receiver:* *${takerDoc.name}*\n` +
                             `*Amount:* *₹${Number(amount).toLocaleString('en-IN')}*\n` +
                             `*Date:* ${formattedDate}` +
                             `\n\n_This is an automated notification from Unique Engineering._`;
 
                         await sendWhatsapp(takerDoc.phone, msg, req.user?.id);
-                        // Wait 1.2s before next message to avoid spam detection
                         await delay(1200);
                     }
                 } catch (individualErr) {
                     console.error(`[BulkTransfer] WhatsApp failed for taker ${taker} (non-critical):`, individualErr.message);
-                    // Continue to next receiver even if one fails
                 }
             }
         } catch (wpErr) {
             console.error('[BulkTransfer] WhatsApp loop error (non-critical):', wpErr.message);
         }
-        // ────────────────────────────────────────────────────────────────────
 
         res.status(201).json({ success: true, message: 'Transfers recorded successfully' });
     } catch (error) {
@@ -215,8 +225,8 @@ exports.deleteTransfer = async (req, res) => {
         }
 
         // Reverse Balances
-        await EmployeeMaster.findByIdAndUpdate(transfer.giver, { $inc: { totalAmount: transfer.amount } }, { session });
-        await EmployeeMaster.findByIdAndUpdate(transfer.taker, { $inc: { totalAmount: -transfer.amount } }, { session });
+        await updateBalanceHelper(transfer.giver, transfer.amount, session);
+        await updateBalanceHelper(transfer.taker, -transfer.amount, session);
 
         // Delete Ledger Entries
         await EmployeeLedger.deleteMany({ referenceId: transfer._id }, { session });
@@ -249,8 +259,8 @@ exports.updateTransfer = async (req, res) => {
         }
 
         // 1. Reverse old balances
-        await EmployeeMaster.findByIdAndUpdate(oldTransfer.giver, { $inc: { totalAmount: oldTransfer.amount } }, { session });
-        await EmployeeMaster.findByIdAndUpdate(oldTransfer.taker, { $inc: { totalAmount: -oldTransfer.amount } }, { session });
+        await updateBalanceHelper(oldTransfer.giver, oldTransfer.amount, session);
+        await updateBalanceHelper(oldTransfer.taker, -oldTransfer.amount, session);
 
         // 2. Update transfer record
         const updatedTransfer = await EmployeeTransfer.findByIdAndUpdate(id, {
@@ -258,8 +268,8 @@ exports.updateTransfer = async (req, res) => {
         }, { new: true, session });
 
         // 3. Apply new balances
-        await EmployeeMaster.findByIdAndUpdate(giver, { $inc: { totalAmount: -amount } }, { session });
-        await EmployeeMaster.findByIdAndUpdate(taker, { $inc: { totalAmount: amount } }, { session });
+        await updateBalanceHelper(giver, -amount, session);
+        await updateBalanceHelper(taker, amount, session);
 
         // 4. Update ledger entries
         await EmployeeLedger.deleteMany({ referenceId: updatedTransfer._id }, { session });
@@ -299,10 +309,19 @@ exports.updateTransfer = async (req, res) => {
 
 exports.getTransfers = async (req, res) => {
     try {
-        const transfers = await EmployeeTransfer.find()
-            .populate('giver', 'name')
-            .populate('taker', 'name')
-            .sort({ date: -1 });
+        const transfers = await EmployeeTransfer.find().lean().sort({ date: -1 });
+        const emps = await EmployeeMaster.find({}, 'name totalAmount').lean();
+        const customAccs = await MoneyTransferAccount.find({}, 'name totalAmount').lean();
+        
+        const nameMap = {};
+        emps.forEach(e => nameMap[String(e._id)] = { _id: e._id, name: e.name });
+        customAccs.forEach(c => nameMap[String(c._id)] = { _id: c._id, name: `${c.name} (BANK)` });
+
+        transfers.forEach(t => {
+            t.giver = nameMap[String(t.giver)] || { _id: t.giver, name: 'Unknown Account' };
+            t.taker = nameMap[String(t.taker)] || { _id: t.taker, name: 'Unknown Account' };
+        });
+
         res.json({ success: true, data: transfers });
     } catch (error) {
         res.status(500).json({ success: false, message: error.message });

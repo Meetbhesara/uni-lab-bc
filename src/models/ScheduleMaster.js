@@ -89,8 +89,34 @@ const ScheduleMasterSchema = new mongoose.Schema({
     },
     invoiceStatus: {
         type: String,
-        enum: ['Pending', 'Completed'],
+        enum: ['Pending', 'Completed', 'Proforma', 'Final', 'Closed'],
         default: 'Pending'
+    },
+    invoiceDetails: {
+        type: mongoose.Schema.Types.Mixed
+    },
+    // Tracks which Proforma Invoice document owns this entry (prevents double-invoicing)
+    proformaInvoiceId: {
+        type: String,
+        default: null
+    },
+    proformaInvoicePdf: {
+        type: String,
+        default: null
+    },
+    // Tracks which Final Invoice document owns this entry
+    finalInvoiceId: {
+        type: String,
+        default: null
+    },
+    finalInvoicePdf: {
+        type: String,
+        default: null
+    },
+    // Timestamp when the entry was locked into an invoice (idempotency guard)
+    invoiceLockedAt: {
+        type: Date,
+        default: null
     },
     draftingWorkFiles: {
         collectedFiles: [{ name: String, url: String, uploadedAt: { type: Date, default: Date.now }, originalFileId: String, status: { type: String, enum: ['Pending', 'Approved', 'Rejected'], default: 'Pending' } }],

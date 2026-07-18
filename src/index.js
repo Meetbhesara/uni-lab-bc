@@ -6,7 +6,8 @@ const authRoutes = require('./routes/authRoutes');
 const cors = require('cors');
 
 app.use(cors());
-app.use(exprees.json({ extended: false }));
+app.use(exprees.json({ limit: '50mb', extended: false }));
+app.use(exprees.urlencoded({ limit: '50mb', extended: false }));
 
 connectDB().then(() => {
     const { autoGenerateMonthSchedules } = require('./utils/monthScheduleGenerator');
@@ -27,6 +28,7 @@ const instrumentMasterRoutes = require('./routes/instrumentMasterRoutes');
 const employeeAuthRoutes = require('./routes/employeeAuthRoutes');
 const employeeExpenseRoutes = require('./routes/employeeExpenseRoutes');
 const employeeTransferRoutes = require('./routes/employeeTransferRoutes');
+const moneyTransferAccountRoutes = require('./routes/moneyTransferAccountRoutes');
 const employeeLedgerRoutes = require('./routes/employeeLedgerRoutes');
 const whatsappRoutes = require('./routes/whatsappRoutes');
 const draftingWorkRoutes = require('./routes/draftingWorkRoutes');
@@ -52,6 +54,7 @@ app.use('/api/instrument-master', instrumentMasterRoutes);
 app.use('/api/employee-auth', employeeAuthRoutes);
 app.use('/api/employee-expense', employeeExpenseRoutes);
 app.use('/api/employee-transfer', employeeTransferRoutes);
+app.use('/api/money-transfer-account', moneyTransferAccountRoutes);
 app.use('/api/employee-ledger', employeeLedgerRoutes);
 app.use('/api/drafts', draftingWorkRoutes);
 app.use('/api/events', sseRoutes);
@@ -65,7 +68,7 @@ if (useNasFlag === 'true' && !nasRoot.startsWith('/')) {
 }
 const localRoot = process.env.LOCAL_BASE_PATH || './uploads';
 
-let vehicleMasterUploadPath, employeeMasterUploadPath, clientMasterUploadPath, siteMasterUploadPath, instrumentMasterUploadPath, productsUploadPath;
+let vehicleMasterUploadPath, employeeMasterUploadPath, clientMasterUploadPath, siteMasterUploadPath, instrumentMasterUploadPath, productsUploadPath, invoiceUploadPath;
 if (useNasFlag === 'true') {
     vehicleMasterUploadPath = path.join(nasRoot, 'vehicle_master');
     employeeMasterUploadPath = path.join(nasRoot, 'employee_master');
@@ -73,6 +76,7 @@ if (useNasFlag === 'true') {
     siteMasterUploadPath = path.join(nasRoot, 'site_master');
     instrumentMasterUploadPath = path.join(nasRoot, 'instrument_master');
     productsUploadPath = path.join(nasRoot, 'products');
+    invoiceUploadPath = path.join(nasRoot, 'invoice');
 } else {
     vehicleMasterUploadPath = path.isAbsolute(localRoot)
         ? path.join(localRoot, 'vehicle_master')
@@ -92,6 +96,9 @@ if (useNasFlag === 'true') {
     productsUploadPath = path.isAbsolute(localRoot)
         ? path.join(localRoot, 'products')
         : path.join(process.cwd(), localRoot, 'products');
+    invoiceUploadPath = path.isAbsolute(localRoot)
+        ? path.join(localRoot, 'invoice')
+        : path.join(process.cwd(), localRoot, 'invoice');
 }
 
 // Initialize and Ensure Directories Exist
@@ -107,7 +114,11 @@ const ensureDirectories = () => {
         path.join(productsUploadPath, 'pdfs'),
         path.join(productsUploadPath, 'videos'),
         path.join(process.cwd(), 'uploads'),
-        path.join(process.cwd(), 'whatsapp_auth')
+        path.join(process.cwd(), 'whatsapp_auth'),
+        invoiceUploadPath,
+        path.join(invoiceUploadPath, 'perfoma'),
+        path.join(invoiceUploadPath, 'proforma'),
+        path.join(invoiceUploadPath, 'final')
     ];
 
     dirs.forEach(dir => {
@@ -141,6 +152,9 @@ app.use('/api/uploads/instrument_master', exprees.static(instrumentMasterUploadP
 
 app.use('/uploads/products', exprees.static(productsUploadPath));
 app.use('/api/uploads/products', exprees.static(productsUploadPath));
+
+app.use('/uploads/invoice', exprees.static(invoiceUploadPath));
+app.use('/api/uploads/invoice', exprees.static(invoiceUploadPath));
 
 // Generic Fallback for other uploads (like Quotation PDFs in local folder)
 app.use('/uploads', exprees.static('uploads'));

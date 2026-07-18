@@ -564,28 +564,109 @@ exports.deleteExpense = async (req, res) => {
             return res.status(404).json({ success: false, message: 'Expense record not found' });
         }
 
-        // Reverse Balance Update
+        const ScheduleMaster = require('../models/ScheduleMaster');
+
+        // 1. Revert Employee balances (Option B: Givers & Receivers)
+        if (expense.creditDebit) {
+            // Revert givenTo: the receiver's balance was increased, so we decrease it
+            if (expense.creditDebit.givenTo && expense.creditDebit.givenTo.length > 0) {
+                for (const item of expense.creditDebit.givenTo) {
+                    await EmployeeMaster.findByIdAndUpdate(
+                        item.employeeRef,
+                        { $inc: { totalAmount: -item.amount } },
+                        { session }
+                    );
+                }
+            }
+            // Revert receivedFrom: the giver's balance was decreased, so we increase it
+            if (expense.creditDebit.receivedFrom && expense.creditDebit.receivedFrom.length > 0) {
+                for (const item of expense.creditDebit.receivedFrom) {
+                    await EmployeeMaster.findByIdAndUpdate(
+                        item.employeeRef,
+                        { $inc: { totalAmount: item.amount } },
+                        { session }
+                    );
+                }
+            }
+        }
+
+        // 2. Revert Giver/Receiver netImpact on the main employee
+        const totalGiven = expense.creditDebit?.givenTo?.reduce((acc, curr) => acc + (Number(curr.amount) || 0), 0) || 0;
+        const totalReceived = expense.creditDebit?.receivedFrom?.reduce((acc, curr) => acc + (Number(curr.amount) || 0), 0) || 0;
+        const netImpact = expense.totalExpense + totalGiven - totalReceived;
+
         await EmployeeMaster.findByIdAndUpdate(
             expense.employeeId,
-            { $inc: { totalAmount: expense.totalExpense } },
+            { $inc: { totalAmount: netImpact } },
             { session }
         );
 
-        // Remove Ledger Entry
+        // 3. Reset Schedule quantity for clientSites linked to this expense
+        if (expense.clientSites && expense.clientSites.length > 0) {
+            for (const cs of expense.clientSites) {
+                if (cs.scheduleId) {
+                    await ScheduleMaster.findByIdAndUpdate(
+                        cs.scheduleId,
+                        { $set: { quantity: 0 } },
+                        { session }
+                    );
+                }
+            }
+        }
+
+        // 4. Remove Ledger Entries
         await EmployeeLedger.deleteMany({ referenceId: expense._id }, { session });
 
-        // Remove Expense
+        // 5. Remove Expense document
         await EmployeeExpense.findByIdAndDelete(id, { session });
 
         await session.commitTransaction();
         session.endSession();
+        
         broadcast('expense-changed', { action: 'deleted', id });
-        res.json({ success: true, message: 'Expense deleted and balance restored' });
+        res.json({ success: true, message: 'Expense deleted and balances/schedules updated successfully' });
     } catch (error) {
         await session.abortTransaction();
         session.endSession();
+        console.error('Error in deleteExpense:', error);
         res.status(500).json({ success: false, message: error.message });
     }
+};
+
+const enrichExpensesWithUniversalNames = async (expenses) => {
+    const EmployeeMaster = require('../models/EmployeeMaster');
+    const MoneyTransferAccount = require('../models/MoneyTransferAccount');
+    const empsList = await EmployeeMaster.find({}, 'name status').lean();
+    const customAccsList = await MoneyTransferAccount.find({}, 'name').lean();
+    const universalNameMap = {};
+    empsList.forEach(e => universalNameMap[String(e._id)] = e.name);
+    customAccsList.forEach(c => universalNameMap[String(c._id)] = `${c.name} (BANK)`);
+
+    return expenses.map(exp => {
+        const expObj = exp.toObject ? exp.toObject() : { ...exp };
+        const givenTo = (expObj.creditDebit?.givenTo || []).map(g => {
+            const rawId = String(g.employeeRef?._id || g.employeeRef || '');
+            const targetName = universalNameMap[rawId];
+            return {
+                ...g,
+                employeeRef: targetName ? { _id: rawId, name: targetName } : (g.employeeRef && typeof g.employeeRef === 'object' && g.employeeRef.name ? g.employeeRef : { _id: rawId, name: 'Unknown Account' }),
+                employeeName: targetName || (g.employeeRef && typeof g.employeeRef === 'object' && g.employeeRef.name ? g.employeeRef.name : 'Unknown Account')
+            };
+        });
+        const receivedFrom = (expObj.creditDebit?.receivedFrom || []).map(r => {
+            const rawId = String(r.employeeRef?._id || r.employeeRef || '');
+            const targetName = universalNameMap[rawId];
+            return {
+                ...r,
+                employeeRef: targetName ? { _id: rawId, name: targetName } : (r.employeeRef && typeof r.employeeRef === 'object' && r.employeeRef.name ? r.employeeRef : { _id: rawId, name: 'Unknown Account' }),
+                employeeName: targetName || (r.employeeRef && typeof r.employeeRef === 'object' && r.employeeRef.name ? r.employeeRef.name : 'Unknown Account')
+            };
+        });
+        return {
+            ...expObj,
+            creditDebit: { givenTo, receivedFrom }
+        };
+    });
 };
 
 exports.getExpensesByEmployee = async (req, res) => {
@@ -595,10 +676,10 @@ exports.getExpensesByEmployee = async (req, res) => {
             .populate('employeeId', 'name')
             .populate('clientSites.clientId', 'clientName')
             .populate('clientSites.siteId', 'siteName')
-            .populate('creditDebit.givenTo.employeeRef', 'name')
-            .populate('creditDebit.receivedFrom.employeeRef', 'name')
-            .sort({ date: -1 });
-        res.json({ success: true, data: expenses });
+            .sort({ date: -1 })
+            .lean();
+        const enriched = await enrichExpensesWithUniversalNames(expenses);
+        res.json({ success: true, data: enriched });
     } catch (error) {
         res.status(500).json({ success: false, message: error.message });
     }
@@ -610,10 +691,10 @@ exports.getAllExpenses = async (req, res) => {
             .populate('employeeId', 'name')
             .populate('clientSites.clientId', 'clientName')
             .populate('clientSites.siteId', 'siteName')
-            .populate('creditDebit.givenTo.employeeRef', 'name')
-            .populate('creditDebit.receivedFrom.employeeRef', 'name')
-            .sort({ date: -1 });
-        res.json({ success: true, data: expenses });
+            .sort({ date: -1 })
+            .lean();
+        const enriched = await enrichExpensesWithUniversalNames(expenses);
+        res.json({ success: true, data: enriched });
     } catch (error) {
         res.status(500).json({ success: false, message: error.message });
     }
@@ -824,10 +905,10 @@ exports.getExpensesForEmployee = async (req, res) => {
         const expenses = await EmployeeExpense.find({ employeeId })
             .populate('employeeId', 'name')
             .populate('clientSites.siteId', 'siteName siteAddress')
-            .populate('creditDebit.givenTo.employeeRef', 'name')
-            .populate('creditDebit.receivedFrom.employeeRef', 'name')
-            .sort({ date: -1 });
-        res.json({ success: true, data: expenses });
+            .sort({ date: -1 })
+            .lean();
+        const enriched = await enrichExpensesWithUniversalNames(expenses);
+        res.json({ success: true, data: enriched });
     } catch (error) {
         res.status(500).json({ success: false, message: error.message });
     }
@@ -861,7 +942,41 @@ exports.getAttendanceByDate = async (req, res) => {
             };
         });
 
-        res.json({ success: true, data });
+        // Also check AdminLoginLogs for this exact date to know which Admins logged into the portal today
+        const User = require('../models/User');
+        const AdminLoginLog = require('../models/AdminLoginLog');
+        const EmployeeMaster = require('../models/EmployeeMaster');
+
+        const adminUsers = await User.find({ isAdmin: true }).select('_id email').lean();
+        const adminEmailMap = {};
+        adminUsers.forEach(u => {
+            if (u.email && typeof u.email === 'string' && u.email.trim().length > 3) adminEmailMap[u.email.toLowerCase().trim()] = String(u._id);
+        });
+
+        const adminLogs = await AdminLoginLog.find({ dateStr: date }).select('userId').lean();
+        const loggedInUserIds = new Set(adminLogs.map(l => String(l.userId)).filter(Boolean));
+
+        const activeEmployees = await EmployeeMaster.find({ status: { $ne: 'Deactive' } }).select('_id email createdAt').lean();
+        const adminLoggedInEmpIds = [];
+        const isLinkedAdminMap = {};
+
+        activeEmployees.forEach(emp => {
+            const empIdStr = String(emp._id);
+            const empCreatedDateStr = emp.createdAt ? new Date(emp.createdAt).toISOString().split('T')[0] : '2000-01-01';
+            if (date < empCreatedDateStr) return;
+
+            const empEmail = (emp.email && typeof emp.email === 'string') ? emp.email.toLowerCase().trim() : '';
+
+            const matchedUserId = (empEmail && empEmail.length > 3 && adminEmailMap[empEmail]) ? adminEmailMap[empEmail] : null;
+            if (matchedUserId) {
+                isLinkedAdminMap[empIdStr] = true;
+                if (loggedInUserIds.has(matchedUserId)) {
+                    adminLoggedInEmpIds.push(empIdStr);
+                }
+            }
+        });
+
+        res.json({ success: true, data, adminLoggedInEmpIds, isLinkedAdminMap });
     } catch (error) {
         console.error('getAttendanceByDate Error:', error);
         res.status(500).json({ success: false, message: error.message });
@@ -924,13 +1039,20 @@ exports.getDailySummary = async (req, res) => {
         });
         // ───────────────────────────────────────────────────────────────────────
 
-        // Also fetch ledger entries for the same period (credit & debit)
+        // Build universal name map from both EmployeeMaster and MoneyTransferAccount
+        const EmployeeMaster = require('../models/EmployeeMaster');
+        const MoneyTransferAccount = require('../models/MoneyTransferAccount');
+        const empsList = await EmployeeMaster.find({}, 'name totalAmount foodAllowance status').lean();
+        const customAccsList = await MoneyTransferAccount.find({}, 'name').lean();
+        const universalNameMap = {};
+        empsList.forEach(e => universalNameMap[String(e._id)] = { _id: e._id, name: e.name, status: e.status });
+        customAccsList.forEach(c => universalNameMap[String(c._id)] = { _id: c._id, name: `${c.name} (BANK)`, isBank: true });
+
+        // Also fetch ledger entries for the same period (credit & debit) without populating employee/relatedEmployee to preserve non-EmployeeMaster IDs
         const EmployeeLedger = require('../models/EmployeeLedger');
         const ledgers = await EmployeeLedger.find({
             date: { $gte: fiveDaysAgo, $lte: today }
         })
-            .populate('employee', 'name status')
-            .populate('relatedEmployee', 'name')
             .sort({ date: -1 })
             .lean();
 
@@ -940,25 +1062,24 @@ exports.getDailySummary = async (req, res) => {
         const AdminLoginLog = require('../models/AdminLoginLog');
 
         const activeEmployeesList = await EmployeeMaster.find({ status: { $ne: 'Deactive' } })
-            .select('_id name email status')
+            .select('_id name email status createdAt')
             .lean();
 
         const allUsers = await User.find().select('_id name email isAdmin isSuperAdmin').lean();
         const userEmailMap = {};
         allUsers.forEach(u => {
-            if (u.email && typeof u.email === 'string' && u.email.trim()) {
+            if (u.email && typeof u.email === 'string' && u.email.trim().length > 3) {
                 userEmailMap[u.email.toLowerCase().trim()] = u;
             }
         });
 
-        // Map Employee ID -> Matched Admin User ID based on case-insensitive email comparison
+        // Map Employee ID -> Matched Admin User ID based on case-insensitive email strictly (ignore phone)
         const empIdToMatchedUserMap = {};
         activeEmployeesList.forEach(emp => {
-            if (emp.email && typeof emp.email === 'string' && emp.email.trim()) {
-                const matchedUser = userEmailMap[emp.email.toLowerCase().trim()];
-                if (matchedUser) {
-                    empIdToMatchedUserMap[String(emp._id)] = String(matchedUser._id);
-                }
+            const empEmail = (emp.email && typeof emp.email === 'string') ? emp.email.toLowerCase().trim() : '';
+            const matchedUser = (empEmail && empEmail.length > 3 && userEmailMap[empEmail]) ? userEmailMap[empEmail] : null;
+            if (matchedUser) {
+                empIdToMatchedUserMap[String(emp._id)] = String(matchedUser._id);
             }
         });
 
@@ -983,10 +1104,11 @@ exports.getDailySummary = async (req, res) => {
         const empMap = {};
         expenses.forEach(exp => {
             // Skip if employee is deactivated
-            if (exp.employeeId?.status === 'Deactive') return;
+            const empStatus = exp.employeeId?.status || universalNameMap[String(exp.employeeId?._id || exp.employeeId)]?.status;
+            if (empStatus === 'Deactive') return;
 
             const empId = String(exp.employeeId?._id || exp.employeeId);
-            const empName = exp.employeeId?.name || 'Unknown';
+            const empName = exp.employeeId?.name || universalNameMap[empId]?.name || 'Unknown Account';
             if (!empMap[empId]) {
                 empMap[empId] = { empId, empName, matchedUserId: empIdToMatchedUserMap[empId] || null, entries: [] };
             } else if (!empMap[empId].matchedUserId) {
@@ -1015,11 +1137,11 @@ exports.getDailySummary = async (req, res) => {
                 fuelType: exp.expenses?.fuelType || '',
                 otherExpensesList: exp.otherExpensesList || [],
                 givenTo: (exp.creditDebit?.givenTo || []).map(g => ({
-                    employeeName: g.employeeRef?.name || 'Unknown',
+                    employeeName: universalNameMap[String(g.employeeRef?._id || g.employeeRef)]?.name || g.employeeRef?.name || 'Unknown Account',
                     amount: g.amount
                 })),
                 receivedFrom: (exp.creditDebit?.receivedFrom || []).map(r => ({
-                    employeeName: r.employeeRef?.name || 'Unknown',
+                    employeeName: universalNameMap[String(r.employeeRef?._id || r.employeeRef)]?.name || r.employeeRef?.name || 'Unknown Account',
                     amount: r.amount
                 })),
                 notes: exp.notes || ''
@@ -1043,10 +1165,11 @@ exports.getDailySummary = async (req, res) => {
         ledgers.forEach(l => {
             if (l.category === 'Transfer' && !expenseRefIds.has(String(l.referenceId))) {
                 // Skip deactivated employees in ledger-only entries too
-                if (l.employee?.status === 'Deactive') return;
+                const lEmpStatus = universalNameMap[String(l.employee?._id || l.employee)]?.status;
+                if (lEmpStatus === 'Deactive') return;
 
                 const empId = String(l.employee?._id || l.employee);
-                const empName = l.employee?.name || 'Unknown';
+                const empName = universalNameMap[empId]?.name || 'Unknown Account';
                 if (!empMap[empId]) {
                     empMap[empId] = { empId, empName, matchedUserId: empIdToMatchedUserMap[empId] || null, entries: [] };
                 } else if (!empMap[empId].matchedUserId) {
@@ -1057,10 +1180,11 @@ exports.getDailySummary = async (req, res) => {
                     String(e.referenceId) === String(l.referenceId) && e.category === 'Transfer' && e.type === l.type
                 );
                 if (!alreadyIn) {
+                    const relatedName = universalNameMap[String(l.relatedEmployee?._id || l.relatedEmployee)]?.name || 'Unknown Account';
                     empMap[empId].entries.push({
                         date: l.date,
                         attendance: '-',
-                        siteNames: l.relatedEmployee?.name ? `↔ ${l.relatedEmployee.name}` : '',
+                        siteNames: l.relatedEmployee ? `↔ ${relatedName}` : '',
                         totalExpense: 0,
                         totalDebit: l.type === 'Debit' ? l.amount : 0,
                         totalCredit: l.type === 'Credit' ? l.amount : 0,
@@ -1075,8 +1199,8 @@ exports.getDailySummary = async (req, res) => {
                             petrol: 0,
                             fuelType: '',
                             otherExpensesList: [],
-                            givenTo: l.type === 'Debit' ? [{ employeeName: l.relatedEmployee?.name || 'Unknown', amount: l.amount }] : [],
-                            receivedFrom: l.type === 'Credit' ? [{ employeeName: l.relatedEmployee?.name || 'Unknown', amount: l.amount }] : [],
+                            givenTo: l.type === 'Debit' ? [{ employeeName: relatedName, amount: l.amount }] : [],
+                            receivedFrom: l.type === 'Credit' ? [{ employeeName: relatedName, amount: l.amount }] : [],
                             notes: l.description || ''
                         }
                     });
@@ -1114,6 +1238,8 @@ exports.getDailySummary = async (req, res) => {
             if (!log.userId || !log.dateStr) return;
             const matchingEmps = activeEmployeesList.filter(e => empIdToMatchedUserMap[String(e._id)] === String(log.userId));
             matchingEmps.forEach(empDoc => {
+                const empCreatedDateStr = empDoc.createdAt ? new Date(empDoc.createdAt).toISOString().split('T')[0] : '2000-01-01';
+                if (log.dateStr < empCreatedDateStr) return; // Do not inject logins before employee creation date
                 const empId = String(empDoc._id);
                 if (!empMap[empId]) {
                     empMap[empId] = { 
@@ -1161,10 +1287,10 @@ exports.getDailySummary = async (req, res) => {
                     if ((!existing.attendance || existing.attendance === '-') && entry.attendance && entry.attendance !== '-') {
                         existing.attendance = entry.attendance;
                     }
-                    if (entry.siteNames && !existing.siteNames.includes(entry.siteNames)) {
+                    if (entry.siteNames && !(existing.siteNames || '').includes(entry.siteNames)) {
                         existing.siteNames = existing.siteNames ? `${existing.siteNames} | ${entry.siteNames}` : entry.siteNames;
                     }
-                    if (entry.attendanceRemark && !existing.attendanceRemark.includes(entry.attendanceRemark)) {
+                    if (entry.attendanceRemark && !(existing.attendanceRemark || '').includes(entry.attendanceRemark)) {
                         existing.attendanceRemark = existing.attendanceRemark ? `${existing.attendanceRemark} | ${entry.attendanceRemark}` : entry.attendanceRemark;
                     }
                     if (existing.category !== entry.category) {

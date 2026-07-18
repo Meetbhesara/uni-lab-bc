@@ -1,3 +1,4 @@
+
 const SiteMaster = require('../models/SiteMaster');
 const ClientMaster = require('../models/ClientMaster');
 const path = require('path');
@@ -5,21 +6,19 @@ const fs = require('fs');
 
 const storeSiteMaster = async (req, res) => {
     try {
-        const { client, siteName, workForAppley, ledgerItems, contactPhone, siteAddress, siteLocation, contactPersons, status } = req.body;
+        const { client, siteName, workForAppley, ledgerItems, contactPhone, siteAddress, siteLocation, stateName, stateCode, contactPersons, status } = req.body;
         const files = req.files;
 
         if (!client) {
             return res.status(400).json({ success: false, message: 'Client is required for site creation' });
         }
 
-        // Fetch client to get their clientId
         const clientData = await ClientMaster.findById(client);
         if (!clientData) {
             return res.status(404).json({ success: false, message: 'Client not found' });
         }
 
         const clientShortId = clientData.clientId || '00000';
-
         const prefix = `${clientShortId}-`;
         const sitesWithPrefix = await SiteMaster.find({ siteId: { $regex: `^${prefix}` } });
 
@@ -34,7 +33,6 @@ const storeSiteMaster = async (req, res) => {
         }
         const generatedSiteId = `${clientShortId}-${String(nextSeq).padStart(4, '0')}`;
 
-        // --- Folder Creation Logic ---
         const useNas = process.env.USE_NAS;
         const nasBase = process.env.NAS_BASE_PATH || '/app/storage';
         const localBase = process.env.LOCAL_BASE_PATH || './uploads';
@@ -50,21 +48,17 @@ const storeSiteMaster = async (req, res) => {
             targetDir = path.join(absoluteLocalBase, 'client_master', cId, 'site_master', siteSubfolder);
         }
 
-        // Always create the directory regardless of file uploads
         if (!fs.existsSync(targetDir)) {
             fs.mkdirSync(targetDir, { recursive: true });
         }
 
-        // Initialize subfolders (photos, Daily_report, data)
         const subfolders = ['photos', 'Daily_report', 'data'];
         subfolders.forEach(sub => {
             const subPath = path.join(targetDir, sub);
             if (!fs.existsSync(subPath)) fs.mkdirSync(subPath, { recursive: true });
         });
-        // -----------------------------
 
         const documents = [];
-
         const processFiles = (fieldFiles, subfolder) => {
             if (!fieldFiles) return;
             const flist = Array.isArray(fieldFiles) ? fieldFiles : [fieldFiles];
@@ -99,6 +93,8 @@ const storeSiteMaster = async (req, res) => {
             contactPhone,
             siteAddress,
             siteLocation,
+            stateName: stateName || 'Gujarat',
+            stateCode: stateCode || '24',
             contactPersons: parsedContactPersons,
             documents,
             status: status || 'Active'
@@ -167,34 +163,35 @@ const getSitesByLedger = async (req, res) => {
 const updateSiteMaster = async (req, res) => {
     try {
         const { id } = req.params;
-        const { client, siteName, ledgerItems, siteAddress, siteLocation, contactPersons, status } = req.body;
+        const { client, siteName, workForAppley, ledgerItems, contactPhone, siteAddress, siteLocation, stateName, stateCode, contactPersons, status } = req.body;
         const files = req.files;
 
         const site = await SiteMaster.findById(id);
         if (!site) return res.status(404).json({ success: false, message: 'Site not found' });
 
-        // Update basic fields
-        if (client) site.client = client;
-        if (siteName) site.siteName = siteName;
-        if (siteAddress) site.siteAddress = siteAddress;
-        if (siteLocation) site.siteLocation = siteLocation;
-        if (status) site.status = status;
+        if (client !== undefined && client !== '') site.client = client;
+        if (siteName !== undefined) site.siteName = siteName;
+        if (workForAppley !== undefined) site.workForAppley = workForAppley;
+        if (contactPhone !== undefined) site.contactPhone = contactPhone;
+        if (siteAddress !== undefined) site.siteAddress = siteAddress;
+        if (siteLocation !== undefined) site.siteLocation = siteLocation;
+        if (stateName !== undefined) site.stateName = stateName;
+        if (stateCode !== undefined) site.stateCode = stateCode;
+        if (status !== undefined) site.status = status;
 
-        if (ledgerItems) {
+        if (ledgerItems !== undefined) {
             try {
                 site.ledgerItems = typeof ledgerItems === 'string' ? JSON.parse(ledgerItems) : ledgerItems;
             } catch (e) { console.error('Parse error for ledgerItems:', e); }
         }
 
-        if (contactPersons) {
+        if (contactPersons !== undefined) {
             try {
                 site.contactPersons = typeof contactPersons === 'string' ? JSON.parse(contactPersons) : contactPersons;
             } catch (e) { console.error('Parse error for contactPersons:', e); }
         }
 
-        // Handle new document uploads if any
         if (files) {
-            // Fetch client data to get shortId for URL
             const clientData = await ClientMaster.findById(site.client);
             const clientShortId = (clientData && clientData.clientId) ? clientData.clientId.toLowerCase() : 'unknown_client';
             const sanitizedSiteName = (site.siteName || 'unknown_site').trim().replace(/[^a-z0-9]/gi, '_').toLowerCase();
@@ -215,6 +212,8 @@ const updateSiteMaster = async (req, res) => {
             processUpdateFiles(files.docs, '');
             processUpdateFiles(files.photos, 'photos');
             processUpdateFiles(files.dailyReports, 'Daily_report');
+            processUpdateFiles(files.draftingWorks, 'drafting');
+            processUpdateFiles(files.data, 'data');
         }
 
         await site.save();

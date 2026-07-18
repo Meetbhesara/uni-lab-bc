@@ -38,6 +38,16 @@ const SiteMasterSchema = new mongoose.Schema({
         type: String,
         trim: true
     },
+    stateName: {
+        type: String,
+        trim: true,
+        default: 'Gujarat'
+    },
+    stateCode: {
+        type: String,
+        trim: true,
+        default: '24'
+    },
     documents: [{
         name: String,
         url: String,

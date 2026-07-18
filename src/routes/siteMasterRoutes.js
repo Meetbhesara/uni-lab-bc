@@ -37,10 +37,23 @@ const storage = multer.diskStorage({
         const localBase = process.env.LOCAL_BASE_PATH || './uploads';
 
         try {
-            // Get client ObjectId from request
-            const clientObjId = req.body.client;
-            let clientShortId = 'unknown_client';
+            // Get client ObjectId and site details from request or DB if updating
+            let clientObjId = req.body.client;
+            let siteId = req.body.siteId;
+            let siteName = req.body.siteName;
 
+            if (req.params && req.params.id) {
+                try {
+                    const existingSite = await SiteMaster.findById(req.params.id).populate('client');
+                    if (existingSite) {
+                        if (!clientObjId) clientObjId = existingSite.client?._id || existingSite.client;
+                        if (!siteId) siteId = existingSite.siteId;
+                        if (!siteName) siteName = existingSite.siteName;
+                    }
+                } catch (e) { console.error('Error looking up existing site in multer:', e); }
+            }
+
+            let clientShortId = 'unknown_client';
             if (clientObjId) {
                 const ClientMaster = require('../models/ClientMaster');
                 const clientRecord = await ClientMaster.findById(clientObjId);
@@ -50,8 +63,8 @@ const storage = multer.diskStorage({
             }
 
             // Sanitize site name and combine with siteId for folder naming
-            const siteId = req.body.siteId || 'unknown_id';
-            const siteNamePart = (req.body.siteName || 'unknown_site').trim().replace(/[^a-z0-9]/gi, '_').toLowerCase();
+            siteId = siteId || 'unknown_id';
+            const siteNamePart = (siteName || 'unknown_site').trim().replace(/[^a-z0-9]/gi, '_').toLowerCase();
             const siteSubfolder = `${siteId}-${siteNamePart}`;
 
             let targetDir;
@@ -120,7 +133,8 @@ router.put('/:id', upload.fields([
     { name: 'docs', maxCount: 30 },
     { name: 'photos', maxCount: 30 },
     { name: 'dailyReports', maxCount: 30 },
-    { name: 'draftingWorks', maxCount: 30 }
+    { name: 'draftingWorks', maxCount: 30 },
+    { name: 'data', maxCount: 30 }
 ]), updateSiteMaster);
 router.delete('/:id', deleteSiteMaster);
 router.get('/', getSites);
