@@ -18,4 +18,12 @@ const EnquirySchema = new mongoose.Schema({
     createdAt: { type: Date, default: Date.now }
 });
 
+// ── Indexes (fixes p95=5.3s under load) ───────────────────────────────
+// 1. Admin panel: show newest enquiries first, filter by status
+EnquirySchema.index({ status: 1, createdAt: -1 });
+// 2. Unread badge count (isSeen=false)
+EnquirySchema.index({ isSeen: 1 });
+// 3. Date-only sort (general listing)
+EnquirySchema.index({ createdAt: -1 });
+
 module.exports = mongoose.model('Enquiry', EnquirySchema);

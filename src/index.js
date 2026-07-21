@@ -25,6 +25,7 @@ const clientMasterRoutes = require('./routes/clientMasterRoutes');
 const siteMasterRoutes = require('./routes/siteMasterRoutes');
 const scheduleMasterRoutes = require('./routes/scheduleMasterRoutes');
 const instrumentMasterRoutes = require('./routes/instrumentMasterRoutes');
+const companyMasterRoutes = require('./routes/companyMasterRoutes');
 const employeeAuthRoutes = require('./routes/employeeAuthRoutes');
 const employeeExpenseRoutes = require('./routes/employeeExpenseRoutes');
 const employeeTransferRoutes = require('./routes/employeeTransferRoutes');
@@ -51,6 +52,7 @@ app.use('/api/client-master', clientMasterRoutes);
 app.use('/api/site-master', siteMasterRoutes);
 app.use('/api/schedule-master', scheduleMasterRoutes);
 app.use('/api/instrument-master', instrumentMasterRoutes);
+app.use('/api/company-master', companyMasterRoutes);
 app.use('/api/employee-auth', employeeAuthRoutes);
 app.use('/api/employee-expense', employeeExpenseRoutes);
 app.use('/api/employee-transfer', employeeTransferRoutes);
@@ -68,13 +70,14 @@ if (useNasFlag === 'true' && !nasRoot.startsWith('/')) {
 }
 const localRoot = process.env.LOCAL_BASE_PATH || './uploads';
 
-let vehicleMasterUploadPath, employeeMasterUploadPath, clientMasterUploadPath, siteMasterUploadPath, instrumentMasterUploadPath, productsUploadPath, invoiceUploadPath;
+let vehicleMasterUploadPath, employeeMasterUploadPath, clientMasterUploadPath, siteMasterUploadPath, instrumentMasterUploadPath, companyMasterUploadPath, productsUploadPath, invoiceUploadPath;
 if (useNasFlag === 'true') {
     vehicleMasterUploadPath = path.join(nasRoot, 'vehicle_master');
     employeeMasterUploadPath = path.join(nasRoot, 'employee_master');
     clientMasterUploadPath = path.join(nasRoot, 'client_master');
     siteMasterUploadPath = path.join(nasRoot, 'site_master');
     instrumentMasterUploadPath = path.join(nasRoot, 'instrument_master');
+    companyMasterUploadPath = path.join(nasRoot, 'company_master');
     productsUploadPath = path.join(nasRoot, 'products');
     invoiceUploadPath = path.join(nasRoot, 'invoice');
 } else {
@@ -93,6 +96,9 @@ if (useNasFlag === 'true') {
     instrumentMasterUploadPath = path.isAbsolute(localRoot)
         ? path.join(localRoot, 'instrument_master')
         : path.join(process.cwd(), localRoot, 'instrument_master');
+    companyMasterUploadPath = path.isAbsolute(localRoot)
+        ? path.join(localRoot, 'company_master')
+        : path.join(process.cwd(), localRoot, 'company_master');
     productsUploadPath = path.isAbsolute(localRoot)
         ? path.join(localRoot, 'products')
         : path.join(process.cwd(), localRoot, 'products');
@@ -109,6 +115,7 @@ const ensureDirectories = () => {
         clientMasterUploadPath,
         siteMasterUploadPath,
         instrumentMasterUploadPath,
+        companyMasterUploadPath,
         productsUploadPath,
         path.join(productsUploadPath, 'images'),
         path.join(productsUploadPath, 'pdfs'),
@@ -149,6 +156,9 @@ app.use('/api/uploads/site_master', exprees.static(siteMasterUploadPath));
 
 app.use('/uploads/instrument_master', exprees.static(instrumentMasterUploadPath));
 app.use('/api/uploads/instrument_master', exprees.static(instrumentMasterUploadPath));
+
+app.use('/uploads/company_master', exprees.static(companyMasterUploadPath));
+app.use('/api/uploads/company_master', exprees.static(companyMasterUploadPath));
 
 app.use('/uploads/products', exprees.static(productsUploadPath));
 app.use('/api/uploads/products', exprees.static(productsUploadPath));

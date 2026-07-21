@@ -5,6 +5,7 @@ const EmployeeExpense = require('../models/EmployeeExpense');
 const mongoose = require('mongoose');
 const path = require('path');
 const { broadcast } = require('../utils/sseManager');
+const { sendWhatsapp } = require('../utils/whatsappService');
 
 const getIstDateRange = (dateInput) => {
     const d = new Date(dateInput);
@@ -204,16 +205,26 @@ const updateSchedule = async (req, res) => {
         // ─────────────────────────────────────────────────────────────────────────
         // AUTOMATIC EXPENSE & DOCUMENT TRANSFER WHEN OPERATIVE IS CHANGED
         // ─────────────────────────────────────────────────────────────────────────
+        let cancelledOperative = null;
+        let cancelledSiteName = '';
+        let cancelledDate = '';
+        
         if ('operative' in updates) {
-            const existingSchedule = await ScheduleMaster.findById(id);
+            const existingSchedule = await ScheduleMaster.findById(id).populate('operative', 'name phone').populate('site', 'siteName');
             const newOperativeId = updates.operative; // null if unassigned, ObjectId string if assigned
 
             const oldOperativeId = existingSchedule && existingSchedule.operative
-                ? String(existingSchedule.operative)
+                ? String(existingSchedule.operative._id || existingSchedule.operative)
                 : null;
 
             // Only run if operative is actually changing
             const isActualChange = oldOperativeId && oldOperativeId !== String(newOperativeId);
+            
+            if (isActualChange && existingSchedule.operative?.phone) {
+                cancelledOperative = existingSchedule.operative;
+                cancelledSiteName = existingSchedule.site?.siteName || 'Unknown Site';
+                cancelledDate = existingSchedule.scheduleDate ? new Date(existingSchedule.scheduleDate).toLocaleDateString('en-GB') : 'Unknown Date';
+            }
 
             if (existingSchedule && isActualChange) {
                 try {
@@ -225,7 +236,7 @@ const updateSchedule = async (req, res) => {
 
                     // Step 1: Find old operative's expense record for this date
                     const oldExpense = await EmployeeExpense.findOne({
-                        employeeId: existingSchedule.operative,
+                        employeeId: existingSchedule.operative._id || existingSchedule.operative,
                         date: { $gte: startOfDay, $lt: endOfDay }
                     });
 
@@ -327,7 +338,7 @@ const updateSchedule = async (req, res) => {
             { new: true, runValidators: false }
         )
             .populate('client', 'clientName clientId')
-            .populate('site', 'siteName siteId siteAddress stateName stateCode ledgerItems')
+            .populate('site', 'siteName siteId siteAddress stateName stateCode ledgerItems contactPersons contactPhone')
             .populate('operative', 'name phone')
             .populate('helpers', 'name phone')
             .populate('vehicle', 'vehicleNumber vehicleName')
@@ -391,6 +402,47 @@ const updateSchedule = async (req, res) => {
 
         if (req.body.skipToday === true) {
             await ScheduleMaster.findByIdAndUpdate(schedule._id, { $set: { dayStatus: 'Skipped' } });
+        }
+
+        // WhatsApp Assignment Notifications
+        
+        // 1. Send Cancellation to Old Operative (if changed)
+        if (cancelledOperative && cancelledOperative.phone) {
+            try {
+                let cancelMsg = `*Schedule Cancelled*\n\n`;
+                cancelMsg += `Sorry ${cancelledOperative.name},\n`;
+                cancelMsg += `Your scheduled visit for *${cancelledSiteName}* on *${cancelledDate}* has been cancelled or reassigned.\n`;
+                cancelMsg += `Please check with the admin for your next assignment.`;
+                
+                await sendWhatsapp(cancelledOperative.phone, cancelMsg, req.user?.id);
+            } catch (err) {
+                console.error('[WhatsApp] Failed to send cancellation message:', err.message);
+            }
+        }
+
+        // 2. Send New Assignment to Current Operative
+        if ('operative' in updates && schedule.operative && schedule.operative.phone) {
+            try {
+                const siteName = schedule.site?.siteName || 'N/A';
+                const location = schedule.site?.siteAddress || 'N/A';
+                const contactPerson = (schedule.site?.contactPersons && schedule.site.contactPersons.length > 0) ? schedule.site.contactPersons[0] : 'N/A';
+                const contactPhone = (schedule.site?.contactPhone && schedule.site.contactPhone.length > 0) ? schedule.site.contactPhone[0] : 'N/A';
+                const helpers = (schedule.helpers && schedule.helpers.length > 0) ? schedule.helpers.map(h => h.name).join(', ') : 'None';
+                
+                let msg = `*Work Assignment*\n\n`;
+                if (schedule.scheduleDate) {
+                    msg += `*Date:* ${new Date(schedule.scheduleDate).toLocaleDateString('en-GB')}\n`;
+                }
+                msg += `*Site Name:* ${siteName}\n`;
+                msg += `*Location:* ${location}\n`;
+                msg += `*Contact Person:* ${contactPerson}\n`;
+                msg += `*Contact No:* ${contactPhone}\n`;
+                msg += `*Helpers:* ${helpers}\n`;
+                
+                await sendWhatsapp(schedule.operative.phone, msg, req.user?.id);
+            } catch (whatsappErr) {
+                console.error('[WhatsApp] Failed to send assignment message:', whatsappErr.message);
+            }
         }
 
         broadcast('schedule-changed', { action: 'updated', id: schedule._id });
@@ -751,6 +803,12 @@ const completeSchedule = async (req, res) => {
 const rejectSchedule = async (req, res) => {
     try {
         const { id } = req.params;
+        const { rejectReason } = req.body;
+
+        if (!rejectReason || !rejectReason.trim()) {
+            return res.status(400).json({ success: false, message: 'Rejection reason is required.' });
+        }
+
         const schedule = await ScheduleMaster.findById(id);
         if (!schedule) {
             return res.status(404).json({ success: false, message: 'Schedule not found' });
@@ -827,6 +885,7 @@ const rejectSchedule = async (req, res) => {
         }
 
         schedule.dayStatus = 'Rejected';
+        schedule.rejectReason = rejectReason.trim();
         await schedule.save({ validateBeforeSave: false });
 
         broadcast('schedule-changed', { action: 'rejected', id: schedule._id });

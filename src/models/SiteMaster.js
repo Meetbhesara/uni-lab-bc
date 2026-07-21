@@ -78,4 +78,12 @@ const SiteMasterSchema = new mongoose.Schema({
     }
 });
 
+// ── Indexes (fixes p95=9.7s under load) ───────────────────────────────
+// 1. Client lookup: GET /site-master filtered by client (most common)
+SiteMasterSchema.index({ client: 1, status: 1 });
+// 2. Active sites list (default view shows only Active sites)
+SiteMasterSchema.index({ status: 1 });
+// 3. Text search on site name
+SiteMasterSchema.index({ siteName: 'text' });
+
 module.exports = mongoose.model('SiteMaster', SiteMasterSchema);

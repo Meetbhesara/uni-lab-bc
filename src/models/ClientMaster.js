@@ -65,4 +65,10 @@ const ClientMasterSchema = new mongoose.Schema({
     }
 });
 
+// ── Indexes ────────────────────────────────────────────────────
+// 1. Client name search
+ClientMasterSchema.index({ clientName: 'text' });
+// 2. Sort by newest client
+ClientMasterSchema.index({ createdAt: -1 });
+
 module.exports = mongoose.model('ClientMaster', ClientMasterSchema);

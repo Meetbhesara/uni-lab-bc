@@ -64,6 +64,10 @@ const EmployeeMasterSchema = new mongoose.Schema({
         enum: ['Active', 'Deactive'],
         default: 'Active'
     },
+    showInPaymentReport: {
+        type: Boolean,
+        default: true
+    },
     foodAllowance: {
         type: String,
         enum: ['Food', 'Without Food'],
@@ -115,10 +119,24 @@ const EmployeeMasterSchema = new mongoose.Schema({
             incentive: { type: Number, default: 0 }
         }
     ],
+    statusHistory: [
+        {
+            status: { type: String, enum: ['Active', 'Deactive'] },
+            timestamp: { type: Date, default: Date.now }
+        }
+    ],
     createdAt: {
         type: Date,
         default: Date.now
     }
 });
+
+// ── Indexes (fixes 46.55% error rate under load) ────────────────────────
+// 1. Active employee list (most common admin view)
+EmployeeMasterSchema.index({ status: 1, createdAt: -1 });
+// 2. Payment report filter
+EmployeeMasterSchema.index({ showInPaymentReport: 1, status: 1 });
+// 3. Designation-based filtering
+EmployeeMasterSchema.index({ designation: 1 });
 
 module.exports = mongoose.model('EmployeeMaster', EmployeeMasterSchema);

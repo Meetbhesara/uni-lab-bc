@@ -3,6 +3,7 @@ const router = express.Router();
 const multer = require('multer');
 const path = require('path');
 const fs = require('fs');
+const auth = require('../middlewares/auth');
 const {
     getSchedules,
     createSchedule,
@@ -85,7 +86,7 @@ const upload = multer({
 router.get('/', getSchedules);
 router.get('/sites-by-client/:clientId', getSitesByClient);
 router.post('/', createSchedule);
-router.put('/:id', updateSchedule);
+router.put('/:id', auth, updateSchedule);
 
 // POST /api/schedule-master/complete/:id (Complete with files)
 router.post('/complete/:id', upload.fields([

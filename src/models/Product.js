@@ -25,4 +25,12 @@ const ProductSchema = new mongoose.Schema({
     createdAt: { type: Date, default: Date.now }
 });
 
+// ── Indexes (fixes p95=3.2s under load) ───────────────────────────────
+// 1. Category filter (product page groups by category)
+ProductSchema.index({ category: 1 });
+// 2. Search by name or alternativeNames (used in ?search= query)
+ProductSchema.index({ name: 'text', alternativeNames: 'text', description: 'text' });
+// 3. Newest products first
+ProductSchema.index({ createdAt: -1 });
+
 module.exports = mongoose.model('Product', ProductSchema);

@@ -194,6 +194,7 @@ const storeEmployeeMaster = async (req, res) => {
             paymentStatus: paymentStatus || 'Pending',
             foodAllowance: foodAllowance || 'Food',
             status: status || 'Active',
+            statusHistory: [{ status: status || 'Active', timestamp: new Date() }],
             photo: fileToObj(files?.photo),
             aadharCard: fileToObj(files?.aadharCard),
             panCard: fileToObj(files?.panCard),
@@ -358,7 +359,16 @@ const updateEmployeeMaster = async (req, res) => {
         if (paymentMode !== undefined) oldRecord.paymentMode = paymentMode;
         if (paymentStatus !== undefined) oldRecord.paymentStatus = paymentStatus;
         if (foodAllowance !== undefined) oldRecord.foodAllowance = foodAllowance;
-        if (status !== undefined) oldRecord.status = status;
+        if (status !== undefined) {
+            if (oldRecord.status !== status) {
+                if (!oldRecord.statusHistory) oldRecord.statusHistory = [];
+                oldRecord.statusHistory.push({ status, timestamp: new Date() });
+            }
+            oldRecord.status = status;
+        }
+        if (req.body.showInPaymentReport !== undefined) {
+            oldRecord.showInPaymentReport = req.body.showInPaymentReport === 'true' || req.body.showInPaymentReport === true;
+        }
 
         if (files?.photo) oldRecord.photo = fileToObj(files.photo);
         else if (oldRecord.photo) oldRecord.photo = updateUrlPath(oldRecord.photo);
@@ -649,7 +659,24 @@ const getAttendanceSummary = async (req, res) => {
             } else if (employeeScheduledDays.has(dateStr)) {
                 attendance = 'Present';
             } else {
-                attendance = 'Pending';
+                let effectiveStatus = empRecord?.status || 'Active';
+                if (empRecord && empRecord.statusHistory && empRecord.statusHistory.length > 0) {
+                    const history = [...empRecord.statusHistory].sort((a, b) => new Date(a.timestamp) - new Date(b.timestamp));
+                    const endOfDay = new Date(`${dateStr}T23:59:59.999Z`);
+                    let latestStatusBeforeDate = history[0].status;
+                    for (const record of history) {
+                        if (new Date(record.timestamp) <= endOfDay) {
+                            latestStatusBeforeDate = record.status;
+                        } else {
+                            break;
+                        }
+                    }
+                    effectiveStatus = latestStatusBeforeDate;
+                } else {
+                    // Fallback for older employees: if they are Deactive now and we are checking a date, assume Deactive 
+                    // unless we want to be safe and assume Active. We'll use their current status as fallback.
+                }
+                attendance = (effectiveStatus === 'Deactive') ? 'Deactive' : 'Pending';
             }
 
             if (attendance === 'Present') present++;
@@ -818,8 +845,8 @@ const getAttendanceDetail = async (req, res) => {
                 remark = 'Joined on ' + new Date(empRecord.createdAt).toLocaleDateString('en-GB');
                 sites = ['—'];
             } else if (dateStr > todayStr) {
-                attendance = 'Pending';
-                remark = 'Future date';
+                attendance = (empRecord && empRecord.status === 'Deactive') ? 'Deactive' : 'Pending';
+                remark = (empRecord && empRecord.status === 'Deactive') ? 'Employee deactivated' : 'Future date';
                 sites = ['—'];
             } else if (exp) {
                 attendance = exp.attendance || 'Present';
@@ -853,14 +880,14 @@ const getAttendanceDetail = async (req, res) => {
                 remark = dateStr === todayStr ? 'Scheduled today (No expense logged yet)' : 'Scheduled duty (No separate expense report)';
                 sites = scheds.map(s => s.site?.siteName || 'Unknown Site');
             } else if (dateStr === todayStr) {
-                // Today: if not scheduled, not admin logged in, and no expense marked yet -> Pending
-                attendance = 'Pending';
-                remark = 'Today (No schedule or expense logged yet)';
+                // Today: if not scheduled, not admin logged in, and no expense marked yet
+                attendance = (empRecord && empRecord.status === 'Deactive') ? 'Deactive' : 'Pending';
+                remark = (empRecord && empRecord.status === 'Deactive') ? 'Employee deactivated' : 'Today (No schedule or expense logged yet)';
                 sites = ['—'];
             } else {
-                // Past date: no expense and no schedule -> Pending
-                attendance = 'Pending';
-                remark = 'No schedule or expense logged yet';
+                // Past date: no expense and no schedule
+                attendance = (empRecord && empRecord.status === 'Deactive') ? 'Deactive' : 'Pending';
+                remark = (empRecord && empRecord.status === 'Deactive') ? 'Employee deactivated' : 'No schedule or expense logged yet';
                 sites = ['—'];
             }
 

@@ -52,6 +52,11 @@ const ScheduleMasterSchema = new mongoose.Schema({
         enum: ['Scheduled', 'Completed', 'Rejected', 'Paused'],
         default: 'Scheduled'
     },
+    rejectReason: {
+        type: String,
+        trim: true,
+        default: null
+    },
     vehicle: {
         type: mongoose.Schema.Types.ObjectId,
         ref: 'VehicleMaster'
@@ -127,5 +132,19 @@ const ScheduleMasterSchema = new mongoose.Schema({
         mailFiles: [{ name: String, url: String, uploadedAt: { type: Date, default: Date.now }, originalFileId: String, status: { type: String, enum: ['Pending', 'Approved', 'Rejected'], default: 'Pending' } }]
     }
 }, { timestamps: true });
+
+// ── Indexes for fast querying (fixes p95=19s under load) ──────────────────────
+// 1. Date-based queries: GET /schedule-master?date=xxx (most common query)
+ScheduleMasterSchema.index({ scheduleDate: -1 });
+// 2. Client+date combo (filter schedules by client for a date range)
+ScheduleMasterSchema.index({ client: 1, scheduleDate: -1 });
+// 3. Site+date (used in site-specific schedule lookups)
+ScheduleMasterSchema.index({ site: 1, scheduleDate: -1 });
+// 4. Invoice queries (InvoiceReport page filters by invoiceStatus)
+ScheduleMasterSchema.index({ invoiceStatus: 1, scheduleDate: -1 });
+// 5. Active vs deactive filtering
+ScheduleMasterSchema.index({ status: 1, scheduleDate: -1 });
+// 6. Month group schedules (MONTH type schedules)
+ScheduleMasterSchema.index({ monthGroupId: 1 });
 
 module.exports = mongoose.model('ScheduleMaster', ScheduleMasterSchema);

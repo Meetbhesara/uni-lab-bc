@@ -98,4 +98,12 @@ const EmployeeExpenseSchema = new mongoose.Schema({
     }
 }, { timestamps: true });
 
+// ── Indexes (fixes p95=8.4s under load) ───────────────────────────────
+// 1. Employee + date: GET /employee-expense/admin/:employeeId and attendance queries
+EmployeeExpenseSchema.index({ employeeId: 1, date: -1 });
+// 2. Date only: GET /employee-expense/attendance?date=xxx and daily-summary
+EmployeeExpenseSchema.index({ date: -1 });
+// 3. Attendance status filter (used in bulk-attendance and summary)
+EmployeeExpenseSchema.index({ attendance: 1, date: -1 });
+
 module.exports = mongoose.model('EmployeeExpense', EmployeeExpenseSchema);
