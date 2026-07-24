@@ -18,7 +18,13 @@ const companyMasterSchema = new mongoose.Schema({
     email: { type: String, trim: true },
     bankDetails: { type: bankDetailsSchema, default: () => ({}) },
     panCardNumber: { type: String, trim: true },
-    logo: { type: String } // Path to uploaded logo
+    invoicePrefix: { type: String, trim: true }, // e.g. UE, ULI
+    logo: { type: String }, // Path to uploaded logo
+    udyamDoc: { type: String }, // Path to uploaded Udyam Registration PDF/Photo
+    panCardDoc: { type: String }, // Path to uploaded PAN Card PDF/Photo
+    gstDoc: { type: String }, // Path to uploaded GST Certificate PDF/Photo
+    cancelledChequeDoc: { type: String }, // Path to uploaded Cancelled Cheque PDF/Photo
+    companyStamp: { type: String } // Path to uploaded Company Stamp Photo/Image
 }, { timestamps: true });
 
 module.exports = mongoose.model('CompanyMaster', companyMasterSchema);

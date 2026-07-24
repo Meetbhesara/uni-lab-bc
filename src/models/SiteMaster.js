@@ -20,7 +20,9 @@ const SiteMasterSchema = new mongoose.Schema({
     },
     ledgerItems: [{
         ledger: { type: String, trim: true },
-        amount: { type: Number, default: 0 }
+        shortName: { type: String, trim: true },
+        amount: { type: Number, default: 0 },
+        hsnSac: { type: String, trim: true, default: '998349' }
     }],
     contactPhone: {
         type: String,

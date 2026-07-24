@@ -123,6 +123,18 @@ const ScheduleMasterSchema = new mongoose.Schema({
         type: Date,
         default: null
     },
+    paymentRemark: {
+        type: String,
+        default: null
+    },
+    paymentMode: {
+        type: String,
+        default: null
+    },
+    closedDate: {
+        type: Date,
+        default: null
+    },
     draftingWorkFiles: {
         collectedFiles: [{ name: String, url: String, uploadedAt: { type: Date, default: Date.now }, originalFileId: String, status: { type: String, enum: ['Pending', 'Approved', 'Rejected'], default: 'Pending' } }],
         convertedFiles: [{ name: String, url: String, uploadedAt: { type: Date, default: Date.now }, originalFileId: String, status: { type: String, enum: ['Pending', 'Approved', 'Rejected'], default: 'Pending' } }],

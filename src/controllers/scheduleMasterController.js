@@ -118,6 +118,14 @@ const updateSchedule = async (req, res) => {
             }
         });
 
+        // If dayStatus is set to Rejected, automatically unassign operative & assigned resources
+        if (updates.dayStatus === 'Rejected') {
+            updates.operative = null;
+            updates.helpers = [];
+            updates.vehicle = null;
+            updates.instruments = [];
+        }
+
         // Clear legacy fields via $unset to prevent CastError on ObjectIds
         if (updates.workForAppley !== undefined) unsets.contactPerson = 1;
         if (updates.operativeNames !== undefined) unsets.operativeName = 1;
@@ -886,6 +894,10 @@ const rejectSchedule = async (req, res) => {
 
         schedule.dayStatus = 'Rejected';
         schedule.rejectReason = rejectReason.trim();
+        schedule.operative = null;
+        schedule.helpers = [];
+        schedule.vehicle = null;
+        schedule.instruments = [];
         await schedule.save({ validateBeforeSave: false });
 
         broadcast('schedule-changed', { action: 'rejected', id: schedule._id });
@@ -900,7 +912,7 @@ const rejectSchedule = async (req, res) => {
 const updateInvoiceStatus = async (req, res) => {
     try {
         const { id } = req.params;
-        const { invoiceStatus, invoiceDetails, proformaInvoiceId, finalInvoiceId } = req.body;
+        const { invoiceStatus, invoiceDetails, proformaInvoiceId, finalInvoiceId, paymentRemark, paymentMode, closedDate } = req.body;
         if (!['Pending', 'Completed', 'Proforma', 'Final', 'Closed'].includes(invoiceStatus)) {
             return res.status(400).json({ success: false, message: 'Invalid invoice status' });
         }
@@ -920,6 +932,9 @@ const updateInvoiceStatus = async (req, res) => {
         if (invoiceDetails !== undefined) updateObj.invoiceDetails = invoiceDetails;
         if (proformaInvoiceId !== undefined) updateObj.proformaInvoiceId = proformaInvoiceId;
         if (finalInvoiceId !== undefined) updateObj.finalInvoiceId = finalInvoiceId;
+        if (paymentRemark !== undefined) updateObj.paymentRemark = paymentRemark;
+        if (paymentMode !== undefined) updateObj.paymentMode = paymentMode;
+        if (closedDate !== undefined) updateObj.closedDate = closedDate;
         await ScheduleMaster.updateOne({ _id: id }, { $set: updateObj });
         res.json({ success: true, message: `Invoice marked as ${invoiceStatus}` });
     } catch (error) {

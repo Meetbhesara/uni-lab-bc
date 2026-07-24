@@ -24,10 +24,15 @@ const storeCompany = async (req, res) => {
             }
         }
         
-        if (req.files && req.files.logo && req.files.logo.length > 0) {
-            const file = req.files.logo[0];
-            const urlPath = `/uploads/company_master/${data.companyName?.trim().replace(/[^a-z0-9]/gi, '_').toLowerCase() || 'unknown'}/${file.filename}`;
-            data.logo = urlPath;
+        const docFields = ['logo', 'udyamDoc', 'panCardDoc', 'gstDoc', 'cancelledChequeDoc', 'companyStamp'];
+        if (req.files) {
+            const folderName = data.companyName?.trim().replace(/[^a-z0-9]/gi, '_').toLowerCase() || 'unknown';
+            docFields.forEach(field => {
+                if (req.files[field] && req.files[field].length > 0) {
+                    const file = req.files[field][0];
+                    data[field] = `/uploads/company_master/${folderName}/${file.filename}`;
+                }
+            });
         }
 
         const newCompany = new CompanyMaster(data);
@@ -53,10 +58,23 @@ const updateCompany = async (req, res) => {
             }
         }
 
-        if (req.files && req.files.logo && req.files.logo.length > 0) {
-            const file = req.files.logo[0];
-            const urlPath = `/uploads/company_master/${data.companyName?.trim().replace(/[^a-z0-9]/gi, '_').toLowerCase() || 'unknown'}/${file.filename}`;
-            data.logo = urlPath;
+        const docFields = ['logo', 'udyamDoc', 'panCardDoc', 'gstDoc', 'cancelledChequeDoc', 'companyStamp'];
+        
+        // Handle document removal flags if user clicked remove
+        docFields.forEach(field => {
+            if (data[`remove_${field}`] === 'true' || data[`remove_${field}`] === true) {
+                data[field] = null;
+            }
+        });
+
+        if (req.files) {
+            const folderName = data.companyName?.trim().replace(/[^a-z0-9]/gi, '_').toLowerCase() || 'unknown';
+            docFields.forEach(field => {
+                if (req.files[field] && req.files[field].length > 0) {
+                    const file = req.files[field][0];
+                    data[field] = `/uploads/company_master/${folderName}/${file.filename}`;
+                }
+            });
         }
 
         const updatedCompany = await CompanyMaster.findByIdAndUpdate(id, data, { new: true });
