@@ -18,7 +18,7 @@ if (!fs.existsSync(whatsappAuthPath)) {
 // Chrome leaves SingletonLock files when a Docker container is killed/restarted.
 // These locks are stored inside nested subdirectories of the Chrome profile.
 // We recursively walk the entire session folder to find and delete them all.
-const LOCK_FILES = ['SingletonLock', 'SingletonCookie', 'SingletonSocket'];
+const LOCK_FILES = ['SingletonLock', 'SingletonCookie', 'SingletonSocket', 'DevToolsActivePort'];
 
 const deleteLockFilesIn = (dir) => {
     if (!fs.existsSync(dir)) return;
@@ -73,12 +73,20 @@ const clearInitTimer = (sessionId) => {
 };
 
 // Initialize a specific session
-const initialize = (sessionId = 'system_default') => {
+const initialize = async (sessionId = 'system_default') => {
     if (clients.has(sessionId)) {
         const status = clientStatus.get(sessionId);
         if (status === 'initializing' || status === 'ready' || status === 'qr') {
             console.log(`[WhatsApp] Session ${sessionId} is already ${status}.`);
             return;
+        }
+        // Clean up old instance if disconnected to release Chrome locks
+        const oldClient = clients.get(sessionId);
+        clients.delete(sessionId);
+        if (oldClient) {
+            try {
+                await oldClient.destroy();
+            } catch (e) {}
         }
     }
 
@@ -94,20 +102,24 @@ const initialize = (sessionId = 'system_default') => {
     // Clear existing timer if any
     clearInitTimer(sessionId);
 
-    // Set 45-second fallback safety timeout
-    const fallbackTimer = setTimeout(() => {
+    // Set 300-second (5 minute) fallback safety timeout
+    const fallbackTimer = setTimeout(async () => {
         if (clientStatus.get(sessionId) === 'initializing') {
-            console.warn(`[WhatsApp] ⏱️ Session ${sessionId} initialization timed out after 45s. Resetting status to disconnected.`);
-            logToFile(`Session ${sessionId} initialization timed out after 45s`);
+            console.warn(`[WhatsApp] ⏱️ Session ${sessionId} initialization timed out after 300s. Resetting status to disconnected.`);
+            logToFile(`Session ${sessionId} initialization timed out after 300s`);
             clientStatus.set(sessionId, 'disconnected');
             const stuckClient = clients.get(sessionId);
             if (stuckClient) {
-                stuckClient.destroy().catch(() => {});
                 clients.delete(sessionId);
+                try {
+                    await stuckClient.destroy();
+                } catch (err) {
+                    console.error(`[WhatsApp] Error destroying timed-out client ${sessionId}:`, err.message);
+                }
             }
         }
         initializeTimers.delete(sessionId);
-    }, 45000);
+    }, 300000);
     initializeTimers.set(sessionId, fallbackTimer);
 
     const client = new Client({
@@ -129,11 +141,12 @@ const initialize = (sessionId = 'system_default') => {
             ]
         },
         webVersionCache: {
-            type: 'remote',
-            remotePath: 'https://raw.githubusercontent.com/wppconnect-team/wa-version/main/html/2.2412.54.html',
-            strict: false
+            type: 'local'
         }
     });
+
+    // Save client instance immediately
+    clients.set(sessionId, client);
 
     client.on('qr', (qr) => {
         clearInitTimer(sessionId);
@@ -186,13 +199,26 @@ const initialize = (sessionId = 'system_default') => {
         }
     });
 
-    client.initialize().catch(err => {
+    client.initialize().catch(async (err) => {
         clearInitTimer(sessionId);
         console.error(`[WhatsApp] Session ${sessionId} initialization error:`, err.message);
         clientStatus.set(sessionId, 'disconnected');
-    });
+        clientQrs.delete(sessionId);
+        
+        // Clean up client instance and remove corrupted session folder
+        clients.delete(sessionId);
+        try { await client.destroy(); } catch (e) {}
 
-    clients.set(sessionId, client);
+        const sessionFolder = path.join(whatsappAuthPath, `session-${sessionId}`);
+        if (fs.existsSync(sessionFolder)) {
+            try {
+                fs.rmSync(sessionFolder, { recursive: true, force: true });
+                console.log(`[WhatsApp] 🧹 Removed invalid session folder for ${sessionId}`);
+            } catch (e) {
+                console.warn(`[WhatsApp] Could not delete session folder for ${sessionId}:`, e.message);
+            }
+        }
+    });
 };
 
 // Disconnect a session and clean up its filesystem credentials
