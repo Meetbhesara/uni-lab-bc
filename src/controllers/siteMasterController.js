@@ -142,9 +142,40 @@ const getSites = async (req, res) => {
 
 const getSiteLedgers = async (req, res) => {
     try {
-        const ledgers = await SiteMaster.distinct('ledgerItems.ledger');
-        const formattedLedgers = ledgers.filter(l => l && l.trim() !== '');
-        res.json({ success: true, data: formattedLedgers });
+        const sites = await SiteMaster.find({}, 'ledgerItems');
+        const ledgerMap = {};
+        const formattedLedgersSet = new Set();
+        
+        sites.forEach(site => {
+            if (site.ledgerItems && site.ledgerItems.length > 0) {
+                site.ledgerItems.forEach(item => {
+                    if (item.ledger && item.ledger.trim()) {
+                        const name = item.ledger.trim();
+                        formattedLedgersSet.add(name);
+                        if (!ledgerMap[name]) {
+                            ledgerMap[name] = {
+                                shortName: item.shortName || '',
+                                amount: item.amount || 0,
+                                hsnSac: item.hsnSac || '998349'
+                            };
+                        } else {
+                            if (item.shortName && !ledgerMap[name].shortName) {
+                                ledgerMap[name].shortName = item.shortName;
+                            }
+                            if (item.amount && !ledgerMap[name].amount) {
+                                ledgerMap[name].amount = item.amount;
+                            }
+                        }
+                    }
+                });
+            }
+        });
+
+        res.json({
+            success: true,
+            data: Array.from(formattedLedgersSet),
+            details: ledgerMap
+        });
     } catch (error) {
         res.status(500).json({ success: false, message: error.message });
     }

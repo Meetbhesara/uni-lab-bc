@@ -51,6 +51,7 @@ const cleanChromeLock = (sessionId) => {
 const clients = new Map();
 const clientStatus = new Map(); // 'disconnected' | 'initializing' | 'qr' | 'ready'
 const clientQrs = new Map();   // Holds current base64 QR or raw QR string
+const initializeTimers = new Map(); // Safety fallback timers for hanging initializing states
 
 const logToFile = (msg, obj = '') => {
     try {
@@ -60,6 +61,14 @@ const logToFile = (msg, obj = '') => {
         fs.appendFileSync(logPath, content, 'utf8');
     } catch (e) {
         console.error('Log appender failed', e);
+    }
+};
+
+// Clear safety fallback timer
+const clearInitTimer = (sessionId) => {
+    if (initializeTimers.has(sessionId)) {
+        clearTimeout(initializeTimers.get(sessionId));
+        initializeTimers.delete(sessionId);
     }
 };
 
@@ -81,6 +90,25 @@ const initialize = (sessionId = 'system_default') => {
 
     clientStatus.set(sessionId, 'initializing');
     clientQrs.delete(sessionId);
+
+    // Clear existing timer if any
+    clearInitTimer(sessionId);
+
+    // Set 45-second fallback safety timeout
+    const fallbackTimer = setTimeout(() => {
+        if (clientStatus.get(sessionId) === 'initializing') {
+            console.warn(`[WhatsApp] ⏱️ Session ${sessionId} initialization timed out after 45s. Resetting status to disconnected.`);
+            logToFile(`Session ${sessionId} initialization timed out after 45s`);
+            clientStatus.set(sessionId, 'disconnected');
+            const stuckClient = clients.get(sessionId);
+            if (stuckClient) {
+                stuckClient.destroy().catch(() => {});
+                clients.delete(sessionId);
+            }
+        }
+        initializeTimers.delete(sessionId);
+    }, 45000);
+    initializeTimers.set(sessionId, fallbackTimer);
 
     const client = new Client({
         authStrategy: new LocalAuth({ 
@@ -108,6 +136,7 @@ const initialize = (sessionId = 'system_default') => {
     });
 
     client.on('qr', (qr) => {
+        clearInitTimer(sessionId);
         clientStatus.set(sessionId, 'qr');
         clientQrs.set(sessionId, qr);
         if (sessionId === 'system_default') {
@@ -120,6 +149,7 @@ const initialize = (sessionId = 'system_default') => {
     });
 
     client.on('ready', () => {
+        clearInitTimer(sessionId);
         console.log(`[WhatsApp] Session ${sessionId} is READY!`);
         logToFile(`Session ${sessionId} is READY`);
         clientStatus.set(sessionId, 'ready');
@@ -127,6 +157,7 @@ const initialize = (sessionId = 'system_default') => {
     });
 
     client.on('auth_failure', msg => {
+        clearInitTimer(sessionId);
         console.error(`[WhatsApp] Session ${sessionId} Auth failure:`, msg);
         logToFile(`Session ${sessionId} Auth failure`, { message: msg });
         clientStatus.set(sessionId, 'disconnected');
@@ -134,6 +165,7 @@ const initialize = (sessionId = 'system_default') => {
     });
 
     client.on('disconnected', (reason) => {
+        clearInitTimer(sessionId);
         console.error(`[WhatsApp] Session ${sessionId} disconnected:`, reason);
         logToFile(`Session ${sessionId} disconnected`, { reason });
         clientStatus.set(sessionId, 'disconnected');
@@ -155,6 +187,7 @@ const initialize = (sessionId = 'system_default') => {
     });
 
     client.initialize().catch(err => {
+        clearInitTimer(sessionId);
         console.error(`[WhatsApp] Session ${sessionId} initialization error:`, err.message);
         clientStatus.set(sessionId, 'disconnected');
     });
@@ -167,6 +200,7 @@ const disconnect = async (sessionId) => {
     console.log(`[WhatsApp] Disconnecting session: ${sessionId}`);
     logToFile(`Disconnecting session: ${sessionId}`);
     
+    clearInitTimer(sessionId);
     const client = clients.get(sessionId);
     if (client) {
         try {
