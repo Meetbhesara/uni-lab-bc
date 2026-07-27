@@ -131,6 +131,18 @@ const ScheduleMasterSchema = new mongoose.Schema({
         type: String,
         default: null
     },
+    receiverName: {
+        type: String,
+        default: null
+    },
+    transactionNo: {
+        type: String,
+        default: null
+    },
+    paymentAmount: {
+        type: Number,
+        default: null
+    },
     closedDate: {
         type: Date,
         default: null

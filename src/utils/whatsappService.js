@@ -18,7 +18,7 @@ if (!fs.existsSync(whatsappAuthPath)) {
 // Chrome leaves SingletonLock files when a Docker container is killed/restarted.
 // These locks are stored inside nested subdirectories of the Chrome profile.
 // We recursively walk the entire session folder to find and delete them all.
-const LOCK_FILES = ['SingletonLock', 'SingletonCookie', 'SingletonSocket', 'DevToolsActivePort'];
+const LOCK_FILES = ['SingletonLock', 'SingletonCookie', 'SingletonSocket', 'DevToolsActivePort', 'LOCK', 'LOCK.lock'];
 
 const deleteLockFilesIn = (dir) => {
     if (!fs.existsSync(dir)) return;
@@ -31,16 +31,15 @@ const deleteLockFilesIn = (dir) => {
         } else if (LOCK_FILES.includes(entry.name)) {
             try {
                 fs.unlinkSync(fullPath);
-                console.log(`[WhatsApp] 🧹 Deleted lock: ${fullPath}`);
+                console.log(`[WhatsApp] 🧹 Deleted lock file: ${fullPath}`);
             } catch (err) {
-                console.warn(`[WhatsApp] ⚠️ Could not delete lock ${fullPath}:`, err.message);
+                // Ignore EBUSY or ENOENT errors when cleaning stale locks
             }
         }
     });
 };
 
 const cleanChromeLock = (sessionId) => {
-    // Chrome can store the lock directly in the session folder OR inside Default/, Profile 1/, etc.
     const sessionPath = path.join(whatsappAuthPath, `session-${sessionId}`);
     console.log(`[WhatsApp] 🧹 Scanning for stale Chrome locks in: ${sessionPath}`);
     deleteLockFilesIn(sessionPath);
@@ -72,8 +71,43 @@ const clearInitTimer = (sessionId) => {
     }
 };
 
-// Initialize a specific session
-const initialize = async (sessionId = 'system_default') => {
+// Gracefully destroy all clients on server shutdown or restart
+const destroyAll = async () => {
+    console.log('[WhatsApp] 🛑 Destroying all active WhatsApp clients...');
+    for (const [sessionId, client] of clients.entries()) {
+        try {
+            await client.destroy();
+            console.log(`[WhatsApp] Closed client ${sessionId}`);
+        } catch (e) {
+            console.error(`[WhatsApp] Error destroying client ${sessionId}:`, e.message);
+        }
+    }
+    clients.clear();
+    clientStatus.clear();
+    clientQrs.clear();
+};
+
+// Register graceful shutdown listeners
+const handleGracefulShutdown = async (signal) => {
+    console.log(`[WhatsApp] Received ${signal}. Closing browser instances...`);
+    await destroyAll();
+};
+
+process.once('SIGINT', async () => {
+    await handleGracefulShutdown('SIGINT');
+    process.exit(0);
+});
+process.once('SIGTERM', async () => {
+    await handleGracefulShutdown('SIGTERM');
+    process.exit(0);
+});
+process.once('SIGUSR2', async () => {
+    await handleGracefulShutdown('SIGUSR2');
+    process.kill(process.pid, 'SIGUSR2');
+});
+
+// Initialize a specific session with automatic retries
+const initialize = async (sessionId = 'system_default', attempt = 1, maxAttempts = 3) => {
     if (clients.has(sessionId)) {
         const status = clientStatus.get(sessionId);
         if (status === 'initializing' || status === 'ready' || status === 'qr') {
@@ -90,8 +124,8 @@ const initialize = async (sessionId = 'system_default') => {
         }
     }
 
-    console.log(`[WhatsApp] Initializing WhatsApp Client for session: ${sessionId}`);
-    logToFile(`Initializing session: ${sessionId}`);
+    console.log(`[WhatsApp] Initializing WhatsApp Client for session: ${sessionId} (attempt ${attempt}/${maxAttempts})`);
+    logToFile(`Initializing session: ${sessionId} (attempt ${attempt}/${maxAttempts})`);
 
     // 🧹 Always clean stale Chrome lock files before starting
     cleanChromeLock(sessionId);
@@ -135,7 +169,7 @@ const initialize = async (sessionId = 'system_default') => {
                 '--disable-dev-shm-usage',
                 '--disable-gpu',
                 '--no-zygote',
-                '--ignore-profile-dir-locked',   // ← force-ignore stale lock files
+                '--ignore-profile-dir-locked',   // force-ignore stale lock files
                 '--disable-features=IsolateOrigins,site-per-process',
                 '--user-agent=Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36'
             ]
@@ -201,22 +235,21 @@ const initialize = async (sessionId = 'system_default') => {
 
     client.initialize().catch(async (err) => {
         clearInitTimer(sessionId);
-        console.error(`[WhatsApp] Session ${sessionId} initialization error:`, err.message);
-        clientStatus.set(sessionId, 'disconnected');
-        clientQrs.delete(sessionId);
+        console.error(`[WhatsApp] Session ${sessionId} initialization error (attempt ${attempt}/${maxAttempts}):`, err.message);
         
-        // Clean up client instance and remove corrupted session folder
+        // Clean up stuck client instance safely
         clients.delete(sessionId);
         try { await client.destroy(); } catch (e) {}
 
-        const sessionFolder = path.join(whatsappAuthPath, `session-${sessionId}`);
-        if (fs.existsSync(sessionFolder)) {
-            try {
-                fs.rmSync(sessionFolder, { recursive: true, force: true });
-                console.log(`[WhatsApp] 🧹 Removed invalid session folder for ${sessionId}`);
-            } catch (e) {
-                console.warn(`[WhatsApp] Could not delete session folder for ${sessionId}:`, e.message);
-            }
+        if (attempt < maxAttempts) {
+            console.log(`[WhatsApp] ⏳ Retrying session ${sessionId} in 3 seconds...`);
+            setTimeout(() => {
+                initialize(sessionId, attempt + 1, maxAttempts);
+            }, 3000);
+        } else {
+            clientStatus.set(sessionId, 'disconnected');
+            clientQrs.delete(sessionId);
+            console.error(`[WhatsApp] ❌ Session ${sessionId} failed to initialize after ${maxAttempts} attempts.`);
         }
     });
 };
@@ -240,7 +273,10 @@ const disconnect = async (sessionId) => {
     clientStatus.set(sessionId, 'disconnected');
     clientQrs.delete(sessionId);
 
-    // Delete session files
+    // Give process brief moment to release handles before deleting files
+    await new Promise(resolve => setTimeout(resolve, 1000));
+
+    // Delete session files on explicit disconnect
     const sessionFolder = path.join(whatsappAuthPath, `session-${sessionId}`);
     if (fs.existsSync(sessionFolder)) {
         try {
@@ -467,6 +503,7 @@ module.exports = {
     initialize,
     initializeAll,
     disconnect,
+    destroyAll,
     sendWhatsapp,
     sendWhatsappMedia,
     getStatus,

@@ -612,54 +612,66 @@ const getSchedules = async (req, res) => {
             .sort({ scheduleDate: 1 })
             .lean(); // Use lean to allow modification
 
-        // Fetch documents from EmployeeExpense for each schedule
+        // High-performance Map-based EmployeeExpense lookup (O(1) lookup instead of O(N^2) nested loops)
         const scheduleIds = schedules.map(s => s._id);
-        const expenses = await EmployeeExpense.find({ "clientSites.scheduleId": { $in: scheduleIds } });
+        const expenses = await EmployeeExpense.find({ "clientSites.scheduleId": { $in: scheduleIds } })
+            .select('date employeeId clientSites expenses otherExpensesList photos dataFiles dailyReports expenseFiles')
+            .lean();
+
+        const expenseMap = new Map();
+        expenses.forEach(e => {
+            (e.clientSites || []).forEach(cs => {
+                if (cs.scheduleId) {
+                    const sidStr = String(cs.scheduleId);
+                    if (!expenseMap.has(sidStr)) {
+                        expenseMap.set(sidStr, []);
+                    }
+                    expenseMap.get(sidStr).push({ expense: e, clientSite: cs });
+                }
+            });
+        });
 
         for (let s of schedules) {
             let docs = [];
             let foundExpenseQty = null;
             let hasExpensesFlag = false;
             
-            // Collect any documents attached directly to the site or schedule via completeSchedule modal
             if (s.site?.documents) {
                 docs.push(...s.site.documents);
             }
             
-            // Collect documents and updated quantity from Employee Expenses
-            expenses.forEach(e => {
-                const cs = e.clientSites.find(c => String(c.scheduleId) === String(s._id));
-                if (cs) {
-                    if (Number(cs.quantity) > 0) {
-                        foundExpenseQty = Number(cs.quantity);
-                    }
-
-                    const hasFiles = cs.files && (
-                        (cs.files.photos && cs.files.photos.length > 0) ||
-                        (cs.files.dailyReports && cs.files.dailyReports.length > 0) ||
-                        (cs.files.data && cs.files.data.length > 0) ||
-                        (cs.files.drawing && cs.files.drawing.length > 0)
-                    );
-
-                    const hasExp = (
-                        (Number(e.expenses?.breakfast) || 0) > 0 ||
-                        (Number(e.expenses?.lunch) || 0) > 0 ||
-                        (Number(e.expenses?.dinner) || 0) > 0 ||
-                        (Number(e.expenses?.petrol) || 0) > 0 ||
-                        (e.otherExpensesList && e.otherExpensesList.length > 0) ||
-                        (cs.allocatedExpense > 0) ||
-                        (cs.allocatedCredit > 0) ||
-                        (e.photos && e.photos.length > 0) ||
-                        (e.dataFiles && e.dataFiles.length > 0) ||
-                        (e.dailyReports && e.dailyReports.length > 0)
-                    );
-
-                    if (hasFiles || hasExp) {
-                        hasExpensesFlag = true;
-                    }
+            const relatedExpenses = expenseMap.get(String(s._id)) || [];
+            
+            relatedExpenses.forEach(({ expense: e, clientSite: cs }) => {
+                if (Number(cs.quantity) > 0) {
+                    foundExpenseQty = Number(cs.quantity);
                 }
 
-                if (cs && cs.files) {
+                const hasFiles = cs.files && (
+                    (cs.files.photos && cs.files.photos.length > 0) ||
+                    (cs.files.dailyReports && cs.files.dailyReports.length > 0) ||
+                    (cs.files.data && cs.files.data.length > 0) ||
+                    (cs.files.drawing && cs.files.drawing.length > 0)
+                );
+
+                const hasExp = (
+                    (Number(e.expenses?.breakfast) || 0) > 0 ||
+                    (Number(e.expenses?.lunch) || 0) > 0 ||
+                    (Number(e.expenses?.dinner) || 0) > 0 ||
+                    (Number(e.expenses?.petrol) || 0) > 0 ||
+                    (e.otherExpensesList && e.otherExpensesList.length > 0) ||
+                    (cs.allocatedExpense > 0) ||
+                    (cs.allocatedCredit > 0) ||
+                    (e.photos && e.photos.length > 0) ||
+                    (e.dataFiles && e.dataFiles.length > 0) ||
+                    (e.dailyReports && e.dailyReports.length > 0)
+                );
+
+                if (hasFiles || hasExp) {
+                    hasExpensesFlag = true;
+                }
+
+                if (cs.files) {
                     ['photos', 'dailyReports', 'data', 'drawing'].forEach(cat => {
                         if (cs.files[cat]) {
                             cs.files[cat].forEach(f => {
@@ -669,28 +681,24 @@ const getSchedules = async (req, res) => {
                     });
                 }
                 
-                // Add top-level expense documents if this expense is linked to this schedule
-                if (cs) {
-                    if (e.photos) e.photos.forEach(f => docs.push({ name: f.name, url: f.url, uploadedAt: e.date }));
-                    if (e.dataFiles) e.dataFiles.forEach(f => docs.push({ name: f.name, url: f.url, uploadedAt: e.date }));
-                    if (e.dailyReports) e.dailyReports.forEach(f => docs.push({ name: f.name, url: f.url, uploadedAt: e.date }));
-                    
-                    if (e.expenseFiles) {
-                        ['breakfast', 'lunch', 'dinner', 'petrol'].forEach(cat => {
-                            if (e.expenseFiles[cat]) {
-                                e.expenseFiles[cat].forEach(f => docs.push({ name: f.name, url: f.url, uploadedAt: e.date, category: cat }));
-                            }
-                        });
-                    }
-                    if (e.otherExpensesList) {
-                        e.otherExpensesList.forEach(oe => {
-                            if (oe.files) oe.files.forEach(f => docs.push({ name: f.name, url: f.url, uploadedAt: e.date }));
-                        });
-                    }
+                if (e.photos) e.photos.forEach(f => docs.push({ name: f.name, url: f.url, uploadedAt: e.date }));
+                if (e.dataFiles) e.dataFiles.forEach(f => docs.push({ name: f.name, url: f.url, uploadedAt: e.date }));
+                if (e.dailyReports) e.dailyReports.forEach(f => docs.push({ name: f.name, url: f.url, uploadedAt: e.date }));
+                
+                if (e.expenseFiles) {
+                    ['breakfast', 'lunch', 'dinner', 'petrol'].forEach(cat => {
+                        if (e.expenseFiles[cat]) {
+                            e.expenseFiles[cat].forEach(f => docs.push({ name: f.name, url: f.url, uploadedAt: e.date, category: cat }));
+                        }
+                    });
+                }
+                if (e.otherExpensesList) {
+                    e.otherExpensesList.forEach(oe => {
+                        if (oe.files) oe.files.forEach(f => docs.push({ name: f.name, url: f.url, uploadedAt: e.date }));
+                    });
                 }
             });
             
-            // Also check if drafting files are present on the schedule itself
             if (s.draftingWorkFiles) {
                 const dwf = s.draftingWorkFiles;
                 const hasDraftingFiles = 
@@ -706,7 +714,6 @@ const getSchedules = async (req, res) => {
                 }
             }
             
-            // Strictly use ScheduleMaster ledger (do not overwrite with Employee Expense ledger)
             if (!s.ledger || s.ledger.trim() === '') {
                 s.ledger = 'Visit';
             }
@@ -912,7 +919,7 @@ const rejectSchedule = async (req, res) => {
 const updateInvoiceStatus = async (req, res) => {
     try {
         const { id } = req.params;
-        const { invoiceStatus, invoiceDetails, proformaInvoiceId, finalInvoiceId, paymentRemark, paymentMode, closedDate } = req.body;
+        const { invoiceStatus, invoiceDetails, proformaInvoiceId, finalInvoiceId, paymentRemark, paymentMode, receiverName, transactionNo, paymentAmount, closedDate } = req.body;
         if (!['Pending', 'Completed', 'Proforma', 'Final', 'Closed'].includes(invoiceStatus)) {
             return res.status(400).json({ success: false, message: 'Invalid invoice status' });
         }
@@ -934,6 +941,9 @@ const updateInvoiceStatus = async (req, res) => {
         if (finalInvoiceId !== undefined) updateObj.finalInvoiceId = finalInvoiceId;
         if (paymentRemark !== undefined) updateObj.paymentRemark = paymentRemark;
         if (paymentMode !== undefined) updateObj.paymentMode = paymentMode;
+        if (receiverName !== undefined) updateObj.receiverName = receiverName;
+        if (transactionNo !== undefined) updateObj.transactionNo = transactionNo;
+        if (paymentAmount !== undefined) updateObj.paymentAmount = paymentAmount;
         if (closedDate !== undefined) updateObj.closedDate = closedDate;
         await ScheduleMaster.updateOne({ _id: id }, { $set: updateObj });
         res.json({ success: true, message: `Invoice marked as ${invoiceStatus}` });
