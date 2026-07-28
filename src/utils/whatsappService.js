@@ -2,6 +2,7 @@ const { Client, LocalAuth, MessageMedia } = require('whatsapp-web.js');
 const qrcodeTerminal = require('qrcode-terminal');
 const fs = require('fs');
 const path = require('path');
+const { execSync } = require('child_process');
 
 // Resolve path to storage (respecting NAS vs Local)
 const useNasFlag = process.env.USE_NAS;
@@ -13,6 +14,23 @@ const whatsappAuthPath = useNasFlag === 'true'
 if (!fs.existsSync(whatsappAuthPath)) {
     fs.mkdirSync(whatsappAuthPath, { recursive: true });
 }
+
+// ── Kill orphaned Chrome processes holding locks on session folder ───────────
+const killOrphanedChrome = (sessionId) => {
+    try {
+        const targetPattern = `session-${sessionId}`;
+        console.log(`[WhatsApp] 🔍 Checking for orphaned Chrome processes locking session: ${sessionId}`);
+        if (process.platform === 'win32') {
+            const psScript = `Get-CimInstance Win32_Process -Filter "name = 'chrome.exe'" | Where-Object { $_.CommandLine -and $_.CommandLine.Contains('${targetPattern}') } | ForEach-Object { Stop-Process -Id $_.ProcessId -Force -ErrorAction SilentlyContinue }`;
+            const encodedScript = Buffer.from(psScript, 'utf16le').toString('base64');
+            execSync(`powershell -NoProfile -ExecutionPolicy Bypass -EncodedCommand ${encodedScript}`, { stdio: 'ignore' });
+        } else {
+            execSync(`pkill -9 -f "${targetPattern}"`, { stdio: 'ignore' });
+        }
+    } catch (e) {
+        // Silently ignore if no matching process found or permission issue
+    }
+};
 
 // ── Clean stale Chrome lock files (RECURSIVE) ───────────────────────────────
 // Chrome leaves SingletonLock files when a Docker container is killed/restarted.
@@ -40,6 +58,7 @@ const deleteLockFilesIn = (dir) => {
 };
 
 const cleanChromeLock = (sessionId) => {
+    killOrphanedChrome(sessionId);
     const sessionPath = path.join(whatsappAuthPath, `session-${sessionId}`);
     console.log(`[WhatsApp] 🧹 Scanning for stale Chrome locks in: ${sessionPath}`);
     deleteLockFilesIn(sessionPath);
