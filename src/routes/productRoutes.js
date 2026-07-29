@@ -13,10 +13,12 @@ const cpUpload = upload.fields([
 ]);
 
 router.get('/', productController.getProducts);
+router.get('/subcategories', productController.getSubcategories);
 router.get('/:id', productController.getProductById);
 
 const auth = require('../middlewares/auth');
 
+router.post('/subcategories', auth, productController.saveSubcategories);
 router.post('/', auth, verifyAdmin, cpUpload, productController.createProduct);
 router.put('/:id', auth, verifyAdmin, cpUpload, productController.updateProduct);
 router.delete('/:id', auth, verifyAdmin, productController.deleteProduct);

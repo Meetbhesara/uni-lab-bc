@@ -1,4 +1,5 @@
 const Product = require('../models/Product');
+const SystemSettings = require('../models/SystemSettings');
 const cloudinary = require('../configs/cloudinary');
 const fs = require('fs');
 const path = require('path');
@@ -589,10 +590,48 @@ const deleteProduct = async (req, res) => {
     }
 }
 
+async function getSubcategories(req, res) {
+    try {
+        const setting = await SystemSettings.findOne({ key: 'admin_product_subcategories' });
+        let subcategories = {};
+        if (setting && setting.value) {
+            try {
+                subcategories = JSON.parse(setting.value);
+            } catch (e) {
+                subcategories = {};
+            }
+        }
+        res.json({ success: true, data: subcategories });
+    } catch (err) {
+        console.error('❌ Error in getSubcategories:', err);
+        res.status(500).json({ success: false, message: 'Server Error' });
+    }
+}
+
+async function saveSubcategories(req, res) {
+    try {
+        const { subcategories } = req.body;
+        const valStr = JSON.stringify(subcategories || {});
+        
+        await SystemSettings.findOneAndUpdate(
+            { key: 'admin_product_subcategories' },
+            { key: 'admin_product_subcategories', value: valStr, updatedAt: new Date() },
+            { upsert: true, new: true }
+        );
+
+        res.json({ success: true, message: 'Subcategories saved successfully', data: subcategories });
+    } catch (err) {
+        console.error('❌ Error in saveSubcategories:', err);
+        res.status(500).json({ success: false, message: 'Server Error' });
+    }
+}
+
 module.exports = {
     getProducts,
     getProductById,
     createProduct,
     updateProduct,
-    deleteProduct
+    deleteProduct,
+    getSubcategories,
+    saveSubcategories
 };
