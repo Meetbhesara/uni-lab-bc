@@ -88,15 +88,24 @@ const storage = multer.diskStorage({
 
             req.targetDirs = req.targetDirs || {};
             req.targetDirs[file.fieldname] = finalDir;
+            file.destination = finalDir;
             cb(null, finalDir);
         } catch (err) {
             cb(err);
         }
     },
     filename: (req, file, cb) => {
-        const targetDir = file.destination;
-        
-        cb(null, file.originalname);
+        const targetDir = file.destination || (req.targetDirs && req.targetDirs[file.fieldname]) || '';
+        const name = file.originalname;
+
+        if (targetDir) {
+            const fullPath = path.join(targetDir, name);
+            const { duplicateTopographySiteFile } = require('../utils/fileDuplicator');
+            const schedType = req.body[`${file.fieldname}_scheduleType`] || req.body.scheduleType || 'Topography Survey';
+            duplicateTopographySiteFile(fullPath, schedType);
+        }
+
+        cb(null, name);
     }
 });
 

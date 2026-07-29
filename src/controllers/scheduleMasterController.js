@@ -1256,16 +1256,20 @@ const uploadDraftingWorkFiles = async (req, res) => {
 
         if (!schedule.draftingWorkFiles) schedule.draftingWorkFiles = {};
 
-        const categories = ['collectedFiles', 'convertedFiles', 'liningDrawFiles', 'esurveyWorkFiles', 'finalCheckingFiles'];
+        const categories = ['collectedFiles', 'convertedFiles', 'liningDrawFiles', 'esurveyWorkFiles', 'finalCheckingFiles', 'mailFiles'];
         const { clientShortId, siteSubfolder, originalFileId } = req.body;
         const path = require('path');
+        const { duplicateTopographySiteFile } = require('../utils/fileDuplicator');
         
         categories.forEach(cat => {
             if (req.files && req.files[cat]) {
+                req.files[cat].forEach(f => {
+                    duplicateTopographySiteFile(f.path, schedule.scheduleType);
+                });
                 const docs = req.files[cat].map(f => {
                     let fileUrl = `/uploads/${path.basename(f.path)}`;
                     if (clientShortId && siteSubfolder) {
-                        fileUrl = `/uploads/client_master/${clientShortId}/site_master/${siteSubfolder}/drafting/${path.basename(f.path)}`;
+                        fileUrl = `/uploads/client_master/${clientShortId}/site_master/${siteSubfolder}/drawing/${path.basename(f.path)}`;
                     }
                     const docObj = {
                         name: f.originalname,

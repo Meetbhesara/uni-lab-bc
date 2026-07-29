@@ -47,25 +47,36 @@ const storage = multer.diskStorage({
             let sub = 'data'; 
             if (file.fieldname === 'photos') sub = 'photos';
             else if (file.fieldname === 'dailyReports') sub = 'Daily_report';
-            else if (['collectedFiles', 'convertedFiles', 'liningDrawFiles', 'esurveyWorkFiles', 'finalCheckingFiles'].includes(file.fieldname)) {
-                sub = 'drafting'; // save in drafting directory
+            else if (['collectedFiles', 'convertedFiles', 'liningDrawFiles', 'esurveyWorkFiles', 'finalCheckingFiles', 'mailFiles'].includes(file.fieldname)) {
+                sub = 'drawing'; // save in drawing directory
             }
 
             const subPath = path.join(targetDir, sub);
             if (!fs.existsSync(subPath)) fs.mkdirSync(subPath, { recursive: true });
 
+            file.destination = subPath;
             cb(null, subPath);
         } catch (err) {
             cb(err);
         }
     },
     filename: (req, file, cb) => {
-        if (['collectedFiles', 'convertedFiles', 'liningDrawFiles', 'esurveyWorkFiles', 'finalCheckingFiles'].includes(file.fieldname)) {
-            cb(null, file.originalname); // Use original filename for drafting works
+        const { duplicateTopographySiteFile } = require('../utils/fileDuplicator');
+        let filename;
+        if (['collectedFiles', 'convertedFiles', 'liningDrawFiles', 'esurveyWorkFiles', 'finalCheckingFiles', 'mailFiles'].includes(file.fieldname)) {
+            filename = file.originalname;
         } else {
             const uniqueSuffix = Date.now() + '-' + Math.round(Math.random() * 1e9);
-            cb(null, file.fieldname + '-' + uniqueSuffix + path.extname(file.originalname));
+            filename = file.fieldname + '-' + uniqueSuffix + path.extname(file.originalname);
         }
+
+        if (file.destination) {
+            const fullPath = path.join(file.destination, filename);
+            const schedType = req.body.scheduleType || req.body.scheduleTypeVal || 'Topography Survey';
+            duplicateTopographySiteFile(fullPath, schedType);
+        }
+
+        cb(null, filename);
     }
 });
 
@@ -116,11 +127,12 @@ router.put('/end-month/:client/:site/:monthGroupId', endMonth);
 
 // POST /api/schedule-master/drafting-work/:id (Upload drafting work files)
 router.post('/drafting-work/:id', upload.fields([
-    { name: 'collectedFiles', maxCount: 10 },
-    { name: 'convertedFiles', maxCount: 10 },
-    { name: 'liningDrawFiles', maxCount: 10 },
-    { name: 'esurveyWorkFiles', maxCount: 10 },
-    { name: 'finalCheckingFiles', maxCount: 10 }
+    { name: 'collectedFiles', maxCount: 15 },
+    { name: 'convertedFiles', maxCount: 15 },
+    { name: 'liningDrawFiles', maxCount: 15 },
+    { name: 'esurveyWorkFiles', maxCount: 15 },
+    { name: 'finalCheckingFiles', maxCount: 15 },
+    { name: 'mailFiles', maxCount: 15 }
 ]), uploadDraftingWorkFiles);
 
 // PUT /api/schedule-master/drafting-work-status/:id/:category/:fileId (Update drafting work file status)
