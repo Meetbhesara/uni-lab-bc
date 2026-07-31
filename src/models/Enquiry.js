@@ -20,7 +20,7 @@ const EnquirySchema = new mongoose.Schema({
         quantity: { type: Number, default: 1 }
     }],
     type: { type: String, default: 'enquiry' },
-    status: { type: String, default: 'Pending', enum: ['Pending', 'Pass', 'Reject', 'Sent', 'Done'] },
+    status: { type: String, default: 'Pending', enum: ['Pending', 'Pass', 'Reject', 'Sent', 'Done', 'Processed'] },
     isSeen: { type: Boolean, default: false },
     followUps: [FollowUpSchema],
     firstFollowUpDate: { type: Date },

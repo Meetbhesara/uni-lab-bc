@@ -344,10 +344,20 @@ const createProduct = async (req, res) => {
         }
 
         let parsedStock = 0;
-        if (stock !== undefined && stock !== null && stock !== '') {
-            parsedStock = Number(stock);
+        const rawStock = Array.isArray(stock) ? stock[0] : stock;
+        if (rawStock !== undefined && rawStock !== null && rawStock !== '') {
+            parsedStock = Number(rawStock);
             if (isNaN(parsedStock) || parsedStock < 0) {
                 return res.status(400).json({ msg: 'Stock must be a non-negative number' });
+            }
+        }
+
+        let parsedSizes = [];
+        if (req.body.sizes) {
+            if (typeof req.body.sizes === 'string') {
+                try { parsedSizes = JSON.parse(req.body.sizes); } catch (e) {}
+            } else if (Array.isArray(req.body.sizes)) {
+                parsedSizes = req.body.sizes;
             }
         }
 
@@ -369,7 +379,8 @@ const createProduct = async (req, res) => {
             localPdf,
             localVideos,
             videoLinks: parsedVideoLinks,
-            stock: parsedStock
+            stock: parsedStock,
+            sizes: parsedSizes
         });
 
         const product = await newProduct.save();
@@ -478,6 +489,16 @@ const updateProduct = async (req, res) => {
                 }
             }
             product.videoLinks = parsedVideoLinks;
+        }
+
+        if (req.body.sizes !== undefined) {
+            let parsedSizes = [];
+            if (typeof req.body.sizes === 'string') {
+                try { parsedSizes = JSON.parse(req.body.sizes); } catch (e) {}
+            } else if (Array.isArray(req.body.sizes)) {
+                parsedSizes = req.body.sizes;
+            }
+            product.sizes = parsedSizes;
         }
 
         let currentImages = [];

@@ -5,7 +5,12 @@ const QuotationItemSchema = new mongoose.Schema({
     quantity: { type: Number, required: true },
     price: { type: Number, required: true }, // Unit Price (Manual)
     gst: { type: Number, required: true },   // GST % (Manual)
-    amount: { type: Number } // Calculated (Price * Qty)
+    amount: { type: Number }, // Calculated (Price * Qty)
+    size: { type: String },    // Selected Size variant (optional)
+    selectedSizes: [{
+        size: { type: String },
+        quantity: { type: Number, default: 1 }
+    }]
 }, { _id: false });
 
 const FollowUpSchema = new mongoose.Schema({
@@ -25,7 +30,7 @@ const QuotationSchema = new mongoose.Schema({
     packagingGst: { type: Number, default: 0 }, // GST on Packaging
     gstTotal: { type: Number },
     grandTotal: { type: Number },
-    status: { type: String, default: 'Pending', enum: ['Pending', 'Pass', 'Reject', 'Sent', 'Done'] },
+    status: { type: String, default: 'Pending', enum: ['Pending', 'Pass', 'Reject', 'Sent', 'Done', 'Processed'] },
     followUps: [FollowUpSchema],
     firstFollowUpDate: { type: Date }, // Auto-set to createdAt + 2 days on creation
     nextFollowUp: { type: Date },      // Tracks current active next follow-up date
