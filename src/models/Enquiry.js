@@ -1,5 +1,12 @@
 const mongoose = require('mongoose');
 
+const FollowUpSchema = new mongoose.Schema({
+    remark:          { type: String, required: true },
+    nextFollowUpDate:{ type: Date, required: true },
+    addedBy:         { type: String, default: 'Admin' },
+    addedAt:         { type: Date, default: Date.now }
+});
+
 const EnquirySchema = new mongoose.Schema({
     Name: { type: String, required: true }, // Using 'Name' capitalized based on controller usage
     companyName: { type: String },
@@ -13,8 +20,11 @@ const EnquirySchema = new mongoose.Schema({
         quantity: { type: Number, default: 1 }
     }],
     type: { type: String, default: 'enquiry' },
-    status: { type: String, default: 'Pending' },
+    status: { type: String, default: 'Pending', enum: ['Pending', 'Pass', 'Reject', 'Sent', 'Done'] },
     isSeen: { type: Boolean, default: false },
+    followUps: [FollowUpSchema],
+    firstFollowUpDate: { type: Date },
+    nextFollowUp: { type: Date },
     createdAt: { type: Date, default: Date.now }
 });
 

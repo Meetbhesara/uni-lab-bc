@@ -430,49 +430,41 @@ const sendWhatsappMedia = async (phone, fileUrl, caption, adminId = null) => {
         // 1. Try to resolve the URL locally (handles NAS vs Local paths)
         let localPath = null;
         if (fileUrl) {
-            let relativePath = fileUrl;
-            if (fileUrl.startsWith('http://') || fileUrl.startsWith('https://')) {
+            let relativePath = fileUrl.trim();
+            if (relativePath.startsWith('http://') || relativePath.startsWith('https://')) {
                 try {
-                    const urlObj = new URL(fileUrl);
+                    const urlObj = new URL(relativePath);
                     relativePath = urlObj.pathname;
                 } catch (e) {
-                    console.error('[WhatsApp] Failed to parse URL:', fileUrl);
+                    console.error('[WhatsApp] Failed to parse URL:', relativePath);
                 }
             }
+            
+            try { relativePath = decodeURIComponent(relativePath); } catch (e) {}
+            relativePath = relativePath.replace(/\\/g, '/');
+
+            const useNas = process.env.USE_NAS === 'true';
+            const nasRoot = process.env.NAS_BASE_PATH || '/app/storage';
+            const localRoot = process.env.LOCAL_BASE_PATH || './uploads';
 
             if (relativePath.includes('/uploads/')) {
-                const useNas = process.env.USE_NAS === 'true';
-                const nasRoot = process.env.NAS_BASE_PATH || '/app/storage';
-                const localRoot = process.env.LOCAL_BASE_PATH || './uploads';
-                const subPath = relativePath.split('/uploads/')[1];
+                const subPathParts = relativePath.split('/uploads/');
+                const subPath = subPathParts[subPathParts.length - 1];
 
                 if (useNas) {
-                    if (subPath.startsWith('products/') || 
-                        subPath.startsWith('vehicle_master/') || 
-                        subPath.startsWith('employee_master/') || 
-                        subPath.startsWith('client_master/') || 
-                        subPath.startsWith('site_master/') || 
-                        subPath.startsWith('instrument_master/')) {
-                        localPath = path.join(nasRoot, subPath);
-                    } else {
-                        localPath = path.join(process.cwd(), 'uploads', subPath);
-                    }
+                    localPath = path.join(nasRoot, subPath);
                 } else {
                     const baseDir = path.isAbsolute(localRoot) ? localRoot : path.join(process.cwd(), localRoot);
-                    if (subPath.startsWith('products/') || 
-                        subPath.startsWith('vehicle_master/') || 
-                        subPath.startsWith('employee_master/') || 
-                        subPath.startsWith('client_master/') || 
-                        subPath.startsWith('site_master/') || 
-                        subPath.startsWith('instrument_master/')) {
-                        localPath = path.join(baseDir, subPath);
-                    } else {
-                        localPath = path.join(process.cwd(), 'uploads', subPath);
-                    }
+                    localPath = path.join(baseDir, subPath);
                 }
             }
+            
+            // Fallback if not found yet
+            if ((!localPath || !fs.existsSync(localPath)) && relativePath.startsWith('/api/')) {
+                localPath = path.join(process.cwd(), relativePath.replace('/api/', ''));
+            }
         }
-
+        
         // 2. Load the media (prioritize direct filesystem access to bypass network loopback issues)
         if (localPath && fs.existsSync(localPath)) {
             console.log(`[WhatsApp] Resolving media locally from path: ${localPath}`);
@@ -487,7 +479,7 @@ const sendWhatsappMedia = async (phone, fileUrl, caption, adminId = null) => {
             if (fs.existsSync(cleanedPath)) {
                 media = MessageMedia.fromFilePath(cleanedPath);
             } else {
-                throw new Error(`Local file not found at: ${cleanedPath}`);
+                throw new Error(`Local file not found at: ${cleanedPath} (Tried localPath: ${localPath})`);
             }
         }
 

@@ -112,6 +112,19 @@ router.patch('/:id/seen', async (req, res) => {
     } catch (e) { res.status(500).send('Error'); }
 });
 
+// Update enquiry (e.g. status)
+router.put('/:id', async (req, res) => {
+    try {
+        const enquiry = await Enquiry.findByIdAndUpdate(
+            req.params.id,
+            { $set: req.body },
+            { new: true }
+        );
+        if (!enquiry) return res.status(404).json({ msg: 'Enquiry not found' });
+        res.json(enquiry);
+    } catch (e) { res.status(500).send('Error'); }
+});
+
 // Delete enquiry
 router.delete('/:id', async (req, res) => {
     try {
@@ -122,6 +135,37 @@ router.delete('/:id', async (req, res) => {
     } catch (e) {
         console.error(e);
         res.status(500).send('Error removing enquiry');
+    }
+});
+// Add Follow-up
+router.post('/:id/follow-up', async (req, res) => {
+    try {
+        const { remark, nextFollowUpDate, addedBy, newStatus } = req.body;
+        if (!remark || !nextFollowUpDate) {
+            return res.status(400).json({ msg: 'Remark and next follow-up date are required' });
+        }
+
+        const enquiry = await Enquiry.findById(req.params.id);
+        if (!enquiry) return res.status(404).json({ msg: 'Enquiry not found' });
+
+        enquiry.followUps.push({
+            remark,
+            nextFollowUpDate: new Date(nextFollowUpDate),
+            addedBy: addedBy || 'Admin',
+            addedAt: new Date()
+        });
+
+        enquiry.nextFollowUp = new Date(nextFollowUpDate);
+
+        if (newStatus && ['Pending', 'Pass', 'Reject', 'Sent', 'Done'].includes(newStatus)) {
+            enquiry.status = newStatus;
+        }
+
+        await enquiry.save();
+        res.json({ msg: 'Follow-up added successfully', enquiry });
+    } catch (err) {
+        console.error(err);
+        res.status(500).json({ msg: 'Server error' });
     }
 });
 

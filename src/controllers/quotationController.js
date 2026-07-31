@@ -102,6 +102,12 @@ const createQuotation = async (req, res) => {
             // Split by '(' to get the base ref in case the first one somehow had a suffix
             const baseRef = firstQuote.refNo ? firstQuote.refNo.split('(')[0] : (await getNextRefNo());
             refNo = `${baseRef}(R${existingQuotes.length})`;
+
+            // ── Mark all previous revisions as NOT latest ──────────────────────
+            await Quotation.updateMany(
+                { enquiry: enquiryId },
+                { $set: { isLatest: false } }
+            );
         } else {
             // First time quote for this enquiry
             refNo = await getNextRefNo();
@@ -187,4 +193,49 @@ const deleteQuotation = async (req, res) => {
     }
 };
 
-module.exports = { createQuotation, getQuotations, updateQuotation, deleteQuotation };
+// POST /api/quotations/:id/follow-up
+// Adds a new follow-up remark + next follow-up date to the quotation
+const addFollowUp = async (req, res) => {
+    try {
+        const { remark, nextFollowUpDate, addedBy, newStatus } = req.body;
+
+        if (!remark || !nextFollowUpDate) {
+            return res.status(400).json({ msg: 'Remark and next follow-up date are required' });
+        }
+
+        const quotation = await Quotation.findById(req.params.id).populate('enquiry');
+        if (!quotation) {
+            return res.status(404).json({ msg: 'Quotation not found' });
+        }
+
+        // Prevent adding follow-up if already Done/Rejected
+        if (quotation.status === 'Done' || quotation.status === 'Reject') {
+            return res.status(400).json({ msg: 'Cannot add follow-up to a closed quotation' });
+        }
+
+        // Push new follow-up entry
+        quotation.followUps.push({
+            remark,
+            nextFollowUpDate: new Date(nextFollowUpDate),
+            addedBy: addedBy || 'Admin',
+            addedAt: new Date()
+        });
+
+        // Update the nextFollowUp date on the quotation
+        quotation.nextFollowUp = new Date(nextFollowUpDate);
+
+        // Optionally update status if provided
+        if (newStatus && ['Done', 'Reject', 'Sent', 'Pass'].includes(newStatus)) {
+            quotation.status = newStatus;
+        }
+
+        const updated = await quotation.save();
+        res.json(updated);
+    } catch (err) {
+        console.error('addFollowUp error:', err.message);
+        res.status(500).send('Server Error');
+    }
+};
+
+module.exports = { createQuotation, getQuotations, updateQuotation, deleteQuotation, addFollowUp };
+

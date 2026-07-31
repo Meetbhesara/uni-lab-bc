@@ -37,6 +37,7 @@ const sseRoutes = require('./routes/sseRoutes');
 const path = require('path');
 const fs = require('fs');
 const { initializeAll: initializeWhatsapp } = require('./utils/whatsappService');
+const { startFollowUpCron } = require('./cron/followUpCron');
 
 app.use('/api/auth', authRoutes);
 app.use('/api/products', productRoutes);
@@ -178,5 +179,9 @@ if (fs.existsSync(ASSETS_ROOT)) {
 
 // Initialize WhatsApp client
 initializeWhatsapp();
+
+// Start daily 9 AM follow-up reminder cron
+startFollowUpCron();
+
 const PORT = process.env.PORT || 5000;
 app.listen(PORT, () => console.log(`Server started on port ${PORT}`));

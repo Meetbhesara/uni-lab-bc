@@ -8,9 +8,16 @@ const QuotationItemSchema = new mongoose.Schema({
     amount: { type: Number } // Calculated (Price * Qty)
 }, { _id: false });
 
+const FollowUpSchema = new mongoose.Schema({
+    remark:          { type: String, required: true },
+    nextFollowUpDate:{ type: Date, required: true },  // Next follow-up date set by user
+    addedBy:         { type: String, default: 'Admin' }, // Name of user who added
+    addedAt:         { type: Date, default: Date.now }
+});
+
 const QuotationSchema = new mongoose.Schema({
     enquiry: { type: mongoose.Schema.Types.ObjectId, ref: 'Enquiry', required: true },
-    refNo: { type: String }, // e.g. "000001-2026"
+    refNo: { type: String }, // e.g. \"000001-2026\"
     items: [QuotationItemSchema],
     subTotal: { type: Number },
     discount: { type: Number, default: 0 }, // Flat discount amount
@@ -19,20 +26,30 @@ const QuotationSchema = new mongoose.Schema({
     gstTotal: { type: Number },
     grandTotal: { type: Number },
     status: { type: String, default: 'Pending', enum: ['Pending', 'Pass', 'Reject', 'Sent', 'Done'] },
-    followUps: [{
-        date: { type: Date, required: true },
-        note: { type: String, required: true },
-        isCompleted: { type: Boolean, default: false },
-        createdAt: { type: Date, default: Date.now }
-    }],
+    followUps: [FollowUpSchema],
+    firstFollowUpDate: { type: Date }, // Auto-set to createdAt + 2 days on creation
+    nextFollowUp: { type: Date },      // Tracks current active next follow-up date
     pdfPath: { type: String },
     htmlContent: { type: String },
-    nextFollowUp: { type: Date },
+    // isLatest = true → active/current revision. false → superseded by a newer revision (R1, R2, etc.)
+    isLatest: { type: Boolean, default: true },
     createdAt: { type: Date, default: Date.now }
 });
 
-// Calculate totals before saving
+// Auto-set firstFollowUpDate = createdAt + 2 days on first creation
 QuotationSchema.pre('save', function (next) {
+    // Set first follow-up date only once on new document creation
+    if (this.isNew && !this.firstFollowUpDate) {
+        const followDate = new Date(this.createdAt || new Date());
+        followDate.setDate(followDate.getDate() + 2);
+        this.firstFollowUpDate = followDate;
+        // Also set nextFollowUp to the same initial date if not provided
+        if (!this.nextFollowUp) {
+            this.nextFollowUp = followDate;
+        }
+    }
+
+    // Calculate totals
     let sub = 0;
     let gst = 0;
 
@@ -61,3 +78,4 @@ QuotationSchema.pre('save', function (next) {
 });
 
 module.exports = mongoose.model('Quotation', QuotationSchema);
+

@@ -141,13 +141,128 @@ router.post('/send-product', auth, async (req, res) => {
     try {
         const { phone, imageUrl, caption } = req.body;
         const adminId = req.user?.id;
+        
+        // Find or create user so they appear in the user table
+        let user = await User.findOne({ phone });
+        if (!user) {
+            user = new User({
+                email: `${phone}@gmail.com`,
+                phone,
+                name: 'WhatsApp Client'
+            });
+            await user.save();
+        }
+
         if (imageUrl) {
-            await sendWhatsappMedia(phone, imageUrl, caption, adminId);
+            await sendWhatsappMedia(phone, imageUrl, caption, null);
         } else {
-            await sendWhatsapp(phone, caption, adminId);
+            await sendWhatsapp(phone, caption, null);
         }
         res.status(200).json({ success: true, msg: 'WhatsApp product sent!' });
     } catch (e) {
+        res.status(500).json({ success: false, error: e.message });
+    }
+});
+
+const User = require('../models/User');
+const Enquiry = require('../models/Enquiry');
+
+router.post('/send-multiple-products', auth, async (req, res) => {
+    try {
+        const { phone, companyName, contactPersonName, email, products } = req.body;
+        const adminId = req.user?.id;
+
+        if (!phone) {
+            return res.status(400).json({ success: false, error: 'Phone number is required' });
+        }
+        
+        let targetEmail = email;
+        if (!targetEmail) {
+            targetEmail = `${phone}@gmail.com`;
+        }
+        
+        // 1. Find or create user
+        let user = await User.findOne({ phone });
+        if (!user) user = await User.findOne({ email: targetEmail.toLowerCase() });
+        
+        if (!user) {
+            user = new User({
+                email: targetEmail.toLowerCase(),
+                phone,
+                companyName: companyName || '',
+                contactPersonName: contactPersonName || '',
+                name: contactPersonName || companyName || 'Client'
+            });
+            await user.save();
+        } else {
+            // Update user details if they were missing
+            let updated = false;
+            if (companyName && !user.companyName) { user.companyName = companyName; updated = true; }
+            if (contactPersonName && !user.contactPersonName) { user.contactPersonName = contactPersonName; updated = true; }
+            if (updated) await user.save();
+        }
+
+        // 2. Create WhatsApp Enquiry Log (type: 'whatsapp')
+        const enquiryProducts = products.map(p => ({
+            productId: p._id || p.id,
+            quantity: 1,
+            price: p.price || 0
+        }));
+
+        const defaultFollowUp = new Date();
+        defaultFollowUp.setDate(defaultFollowUp.getDate() + 2); // default 2 days
+
+        const enquiry = new Enquiry({
+            Name: companyName || contactPersonName || 'Guest',
+            companyName,
+            contactPersonName,
+            email: targetEmail,
+            phone,
+            products: enquiryProducts,
+            type: 'whatsapp',
+            status: 'Pending',
+            isSeen: true, // Auto-seen since it's an outbound log
+            firstFollowUpDate: defaultFollowUp,
+            nextFollowUp: defaultFollowUp
+        });
+        await enquiry.save();
+
+        // 3. Send WhatsApp Messages
+        // We will send an intro message, followed by product messages
+        let introMsg = `Hello ${contactPersonName || companyName || 'there'},\n\nHere are the products you requested from Unique Lab Instrument:\n\n`;
+        await sendWhatsapp(phone, introMsg, null);
+        
+        // Add a small delay so messages arrive in order
+        const delay = ms => new Promise(res => setTimeout(res, ms));
+
+        for (const prod of products) {
+            await delay(1500); // 1.5s delay between messages to avoid rate limit or out-of-order delivery
+            
+            const caption = `🚀 *${prod.name?.toUpperCase()}*\n\n` +
+                            `📦 *Category:* ${prod.category || 'General'}\n\n` +
+                            `📝 *Description:*\n${prod.description || 'No description provided'}\n\n` +
+                            `🌐 *View on Website:* https://uniquenas.tail57739c.ts.net/product/${prod._id}`;
+                            
+            const imgPath = prod.localImages?.[0] || prod.images?.[0] || prod.photos?.[0];
+            
+            if (imgPath) {
+                try {
+                    await sendWhatsappMedia(phone, imgPath, caption, null);
+                } catch (mediaErr) {
+                    console.error('[WhatsApp] Failed to send media, falling back to text:', mediaErr.message);
+                    await sendWhatsapp(phone, caption, null);
+                }
+            } else {
+                await sendWhatsapp(phone, caption, null);
+            }
+        }
+        
+        await delay(1000);
+        await sendWhatsapp(phone, `Please let us know if you have any questions or would like a formal quotation.\n\nThank you!`, null);
+
+        res.status(200).json({ success: true, msg: 'WhatsApp products sent successfully!', enquiry });
+    } catch (e) {
+        console.error(`[DEBUG] Exception in /send-multiple-products:`, e);
         res.status(500).json({ success: false, error: e.message });
     }
 });
