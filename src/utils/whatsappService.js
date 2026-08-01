@@ -3,6 +3,13 @@ const qrcodeTerminal = require('qrcode-terminal');
 const fs = require('fs');
 const path = require('path');
 const { execSync } = require('child_process');
+const { broadcast } = require('./sseManager');
+
+const notifyStatusChange = (sessionId, status, qr = null) => {
+    try {
+        broadcast('whatsapp-status-changed', { sessionId, status, qr });
+    } catch (_) {}
+};
 
 // Resolve path to storage (respecting NAS vs Local)
 const useNasFlag = process.env.USE_NAS;
@@ -151,6 +158,7 @@ const initialize = async (sessionId = 'system_default', attempt = 1, maxAttempts
 
     clientStatus.set(sessionId, 'initializing');
     clientQrs.delete(sessionId);
+    notifyStatusChange(sessionId, 'initializing');
 
     // Clear existing timer if any
     clearInitTimer(sessionId);
@@ -161,6 +169,7 @@ const initialize = async (sessionId = 'system_default', attempt = 1, maxAttempts
             console.warn(`[WhatsApp] ⏱️ Session ${sessionId} initialization timed out after 300s. Resetting status to disconnected.`);
             logToFile(`Session ${sessionId} initialization timed out after 300s`);
             clientStatus.set(sessionId, 'disconnected');
+            notifyStatusChange(sessionId, 'disconnected');
             const stuckClient = clients.get(sessionId);
             if (stuckClient) {
                 clients.delete(sessionId);
@@ -205,6 +214,7 @@ const initialize = async (sessionId = 'system_default', attempt = 1, maxAttempts
         clearInitTimer(sessionId);
         clientStatus.set(sessionId, 'qr');
         clientQrs.set(sessionId, qr);
+        notifyStatusChange(sessionId, 'qr', qr);
         if (sessionId === 'system_default') {
             console.log(`\n--- WHATSAPP SYSTEM DEFAULT QR CODE ---`);
             qrcodeTerminal.generate(qr, { small: true });
@@ -220,6 +230,7 @@ const initialize = async (sessionId = 'system_default', attempt = 1, maxAttempts
         logToFile(`Session ${sessionId} is READY`);
         clientStatus.set(sessionId, 'ready');
         clientQrs.delete(sessionId);
+        notifyStatusChange(sessionId, 'ready');
     });
 
     client.on('auth_failure', msg => {
@@ -228,6 +239,7 @@ const initialize = async (sessionId = 'system_default', attempt = 1, maxAttempts
         logToFile(`Session ${sessionId} Auth failure`, { message: msg });
         clientStatus.set(sessionId, 'disconnected');
         clientQrs.delete(sessionId);
+        notifyStatusChange(sessionId, 'disconnected');
     });
 
     client.on('disconnected', (reason) => {
@@ -236,6 +248,7 @@ const initialize = async (sessionId = 'system_default', attempt = 1, maxAttempts
         logToFile(`Session ${sessionId} disconnected`, { reason });
         clientStatus.set(sessionId, 'disconnected');
         clientQrs.delete(sessionId);
+        notifyStatusChange(sessionId, 'disconnected');
 
         // Attempt automatic restart if it is system_default
         if (sessionId === 'system_default') {

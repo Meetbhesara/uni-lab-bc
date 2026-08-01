@@ -94,7 +94,8 @@ router.get('/', async (req, res) => {
     try {
         const enquiries = await Enquiry.find()
             .populate('products.productId')
-            .sort({ createdAt: -1 });
+            .sort({ createdAt: -1 })
+            .lean();
         res.json(enquiries);
     } catch (e) { res.status(500).send('Error'); }
 });

@@ -12,5 +12,8 @@ const AdminLoginLogSchema = new mongoose.Schema({
     ipAddress: { type: String }
 });
 
+// ── Compound Index (Optimizes GET /api/auth/me heartbeat check) ───────────
+AdminLoginLogSchema.index({ userId: 1, dateStr: 1, loginAt: -1 });
+
 module.exports = mongoose.model('AdminLoginLog', AdminLoginLogSchema);
 

@@ -145,7 +145,8 @@ const getQuotations = async (req, res) => {
         const list = await Quotation.find()
             .populate('enquiry')
             .populate('items.product')
-            .sort({ createdAt: -1 });
+            .sort({ createdAt: -1 })
+            .lean();
         res.json(list);
     } catch (err) {
         console.error(err.message);

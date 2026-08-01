@@ -90,5 +90,10 @@ QuotationSchema.pre('save', function (next) {
     next();
 });
 
+// ── Compound Indexes (Optimizes GET /api/quotations & FollowUp Cron) ────────
+QuotationSchema.index({ status: 1, isLatest: 1, createdAt: -1 });
+QuotationSchema.index({ enquiry: 1, createdAt: -1 });
+QuotationSchema.index({ nextFollowUp: 1, status: 1, isLatest: 1 });
+
 module.exports = mongoose.model('Quotation', QuotationSchema);
 

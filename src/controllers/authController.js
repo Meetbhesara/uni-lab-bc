@@ -115,7 +115,7 @@ const checkUserLocation = async (user, body) => {
 
 const getMe = async (req, res) => {
     try {
-        const user = await User.findById(req.user.id).select('-password -twoFactorSecret -backupCodes');
+        const user = await User.findById(req.user.id).select('-password -twoFactorSecret -backupCodes').lean();
         if (!user) return res.status(404).json({ msg: 'User not found' });
 
         if (user.isAdmin) {
