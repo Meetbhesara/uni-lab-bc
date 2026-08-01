@@ -111,7 +111,7 @@ const sendFollowUpReminders = async () => {
         // Find all users who have enquiry read permission (or are superAdmin / admin)
         const allUsers = await User.find({});
         const targetUsers = allUsers.filter(u => {
-            if (u.isSuperAdmin || u.isAdmin) return true;
+            if (u.isSuperAdmin) return true;
             const perms = u.permissions || {};
             // Check enquiry read permission (check common key names)
             return (
@@ -198,19 +198,19 @@ const sendFollowUpReminders = async () => {
 };
 
 /**
- * Starts the daily 9:00 AM follow-up cron job.
+ * Starts the daily 12:02 PM follow-up cron job.
  * Call this once during server startup.
  */
 const startFollowUpCron = () => {
-    // Runs every day at 9:00 AM (cron: minute=0, hour=9)
-    cron.schedule('0 9 * * *', () => {
-        console.log('[FollowUpCron] ⏰ Cron triggered at 9:00 AM');
+    // Runs every day at 12:02 PM IST (cron: minute=2, hour=12)
+    cron.schedule('2 12 * * *', () => {
+        console.log('[FollowUpCron] ⏰ Cron triggered at 12:02 PM');
         sendFollowUpReminders();
     }, {
         timezone: 'Asia/Kolkata'
     });
 
-    console.log('[FollowUpCron] 🟢 Follow-up cron scheduled — daily at 9:00 AM IST');
+    console.log('[FollowUpCron] 🟢 Follow-up cron scheduled — daily at 12:02 PM IST');
 };
 
 module.exports = { startFollowUpCron, sendFollowUpReminders };
