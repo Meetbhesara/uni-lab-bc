@@ -52,6 +52,14 @@ QuotationSchema.pre('save', function (next) {
         if (!this.nextFollowUp) {
             this.nextFollowUp = followDate;
         }
+        if (!this.followUps || this.followUps.length === 0) {
+            this.followUps.push({
+                remark: '-',
+                nextFollowUpDate: followDate,
+                addedBy: 'System',
+                addedAt: new Date()
+            });
+        }
     }
 
     // Calculate totals

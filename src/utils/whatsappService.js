@@ -510,6 +510,30 @@ const getStatus = (sessionId) => {
     };
 };
 
+const getAllWhatsappHealth = () => {
+    const sessions = [];
+    for (const [sessionId, status] of clientStatus.entries()) {
+        sessions.push({
+            sessionId,
+            status,
+            isReady: status === 'ready',
+            hasQr: !!clientQrs.get(sessionId)
+        });
+    }
+    if (sessions.length === 0) {
+        sessions.push({
+            sessionId: 'system_default',
+            status: clientStatus.get('system_default') || 'disconnected',
+            isReady: clientStatus.get('system_default') === 'ready',
+            hasQr: !!clientQrs.get('system_default')
+        });
+    }
+    return {
+        activeSessionsCount: sessions.filter(s => s.isReady).length,
+        sessions
+    };
+};
+
 module.exports = {
     initialize,
     initializeAll,
@@ -518,6 +542,7 @@ module.exports = {
     sendWhatsapp,
     sendWhatsappMedia,
     getStatus,
+    getAllWhatsappHealth,
     logToFile,
     isReady: (sessionId = 'system_default') => clientStatus.get(sessionId) === 'ready'
 };

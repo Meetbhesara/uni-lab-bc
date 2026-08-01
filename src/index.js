@@ -5,9 +5,13 @@ const connectDB = require('./configs/db');
 const authRoutes = require('./routes/authRoutes');
 const cors = require('cors');
 
+const { apiTracker } = require('./middlewares/apiTracker');
+const healthRoutes = require('./routes/healthRoutes');
+
 app.use(cors());
 app.use(exprees.json({ limit: '50mb', extended: false }));
 app.use(exprees.urlencoded({ limit: '50mb', extended: false }));
+app.use(apiTracker);
 
 connectDB().then(() => {
     const { autoGenerateMonthSchedules } = require('./utils/monthScheduleGenerator');
@@ -61,6 +65,7 @@ app.use('/api/money-transfer-account', moneyTransferAccountRoutes);
 app.use('/api/employee-ledger', employeeLedgerRoutes);
 app.use('/api/drafts', draftingWorkRoutes);
 app.use('/api/events', sseRoutes);
+app.use('/api/admin/health', healthRoutes);
 
 // Dynamically serve vehicle-master documents based on USE_NAS flag
 const useNasFlag = process.env.USE_NAS;

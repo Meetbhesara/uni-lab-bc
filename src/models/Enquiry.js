@@ -28,6 +28,27 @@ const EnquirySchema = new mongoose.Schema({
     createdAt: { type: Date, default: Date.now }
 });
 
+// Auto-set firstFollowUpDate = createdAt + 2 days on first creation
+EnquirySchema.pre('save', function (next) {
+    if (this.isNew && !this.firstFollowUpDate) {
+        const followDate = new Date(this.createdAt || new Date());
+        followDate.setDate(followDate.getDate() + 2);
+        this.firstFollowUpDate = followDate;
+        if (!this.nextFollowUp) {
+            this.nextFollowUp = followDate;
+        }
+        if (!this.followUps || this.followUps.length === 0) {
+            this.followUps.push({
+                remark: '-',
+                nextFollowUpDate: followDate,
+                addedBy: 'System',
+                addedAt: new Date()
+            });
+        }
+    }
+    next();
+});
+
 // ── Indexes (fixes p95=5.3s under load) ───────────────────────────────
 // 1. Admin panel: show newest enquiries first, filter by status
 EnquirySchema.index({ status: 1, createdAt: -1 });

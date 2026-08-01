@@ -107,6 +107,10 @@ const createQuotation = async (req, res) => {
             refNo = await getNextRefNo();
         }
 
+        const initialFollowUp = nextFollowUp 
+            ? new Date(nextFollowUp) 
+            : new Date(Date.now() + (2 * 24 * 60 * 60 * 1000));
+
         const newQuotation = new Quotation({
             enquiry: enquiryId,
             refNo,
@@ -114,7 +118,15 @@ const createQuotation = async (req, res) => {
             status: status || 'Pending',
             pdfPath,
             htmlContent,
-            nextFollowUp,
+            nextFollowUp: initialFollowUp,
+            firstFollowUpDate: initialFollowUp,
+            followUps: [{
+                remark: '-',
+                nextFollowUpDate: initialFollowUp,
+                addedBy: 'System',
+                addedAt: new Date()
+            }],
+            isLatest: true,
             packaging: packaging || 0,
             packagingGst: packagingGst || 0,
             discount: discount || 0

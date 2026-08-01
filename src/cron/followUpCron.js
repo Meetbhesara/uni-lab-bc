@@ -29,25 +29,76 @@ const sendFollowUpReminders = async () => {
     try {
         console.log('[FollowUpCron] 🕘 Running daily follow-up check...');
 
-        // Build today's date range (midnight to midnight)
-        const todayStart = new Date();
-        todayStart.setHours(0, 0, 0, 0);
+        // ─── 0. AUTO-BACKFILL MISSING nextFollowUp IN DATABASE ────────────────
+        // For any Quotation missing nextFollowUp, compute createdAt + 2 days and save to DB
+        const missingQuoteFollowUps = await Quotation.find({
+            $or: [
+                { nextFollowUp: { $exists: false } },
+                { nextFollowUp: null }
+            ],
+            status: { $nin: ['Done', 'Reject', 'done', 'reject'] }
+        });
+
+        for (const q of missingQuoteFollowUps) {
+            const baseDate = q.createdAt ? new Date(q.createdAt) : new Date();
+            const computedFollowUp = new Date(baseDate.getTime() + (2 * 24 * 60 * 60 * 1000));
+            q.firstFollowUpDate = q.firstFollowUpDate || computedFollowUp;
+            q.nextFollowUp = computedFollowUp;
+            if (q.isLatest === undefined) q.isLatest = true;
+            if (!q.followUps || q.followUps.length === 0) {
+                q.followUps = [{
+                    remark: '-',
+                    nextFollowUpDate: computedFollowUp,
+                    addedBy: 'System',
+                    addedAt: new Date()
+                }];
+            }
+            await q.save();
+        }
+
+        // For any WhatsApp Enquiry missing nextFollowUp, compute createdAt + 2 days and save to DB
+        const Enquiry = require('../models/Enquiry');
+        const missingEnqFollowUps = await Enquiry.find({
+            type: 'whatsapp',
+            $or: [
+                { nextFollowUp: { $exists: false } },
+                { nextFollowUp: null }
+            ],
+            status: { $nin: ['Done', 'Reject', 'done', 'reject'] }
+        });
+
+        for (const e of missingEnqFollowUps) {
+            const baseDate = e.createdAt ? new Date(e.createdAt) : new Date();
+            const computedFollowUp = new Date(baseDate.getTime() + (2 * 24 * 60 * 60 * 1000));
+            e.firstFollowUpDate = e.firstFollowUpDate || computedFollowUp;
+            e.nextFollowUp = computedFollowUp;
+            if (!e.followUps || e.followUps.length === 0) {
+                e.followUps = [{
+                    remark: '-',
+                    nextFollowUpDate: computedFollowUp,
+                    addedBy: 'System',
+                    addedAt: new Date()
+                }];
+            }
+            await e.save();
+        }
+
+        // ─── 1. BUILD DATE BOUNDARY (UP TO END OF TODAY) ─────────────────────
         const todayEnd = new Date();
         todayEnd.setHours(23, 59, 59, 999);
 
-        // Find all open quotations where nextFollowUp falls today AND is the latest revision
+        // Find all open quotations where nextFollowUp <= todayEnd AND is latest revision
         const dueQuotations = await Quotation.find({
-            status: { $nin: ['Done', 'Reject'] },
-            isLatest: true,  // ← Never alert for old/superseded revisions
-            nextFollowUp: { $gte: todayStart, $lte: todayEnd }
+            status: { $nin: ['Done', 'Reject', 'done', 'reject'] },
+            isLatest: { $ne: false },  // Include true and documents where isLatest was not explicitly set to false
+            nextFollowUp: { $lte: todayEnd, $ne: null }
         }).populate('enquiry');
 
-        // Find all open whatsapp enquiries where nextFollowUp falls today
-        const Enquiry = require('../models/Enquiry');
+        // Find all open whatsapp enquiries where nextFollowUp <= todayEnd
         const dueEnquiries = await Enquiry.find({
             type: 'whatsapp',
-            status: { $nin: ['Done', 'Reject'] },
-            nextFollowUp: { $gte: todayStart, $lte: todayEnd }
+            status: { $nin: ['Done', 'Reject', 'done', 'reject'] },
+            nextFollowUp: { $lte: todayEnd, $ne: null }
         });
 
         if (dueQuotations.length === 0 && dueEnquiries.length === 0) {
