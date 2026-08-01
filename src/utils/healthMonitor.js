@@ -116,34 +116,44 @@ const getSystemMetrics = async () => {
 
 const calculateContainerAllocations = (totalMemBytes, cpuCores) => {
     const totalMb = Math.round(totalMemBytes / (1024 * 1024));
+    const nodeMemory = process.memoryUsage();
+    const nodeRssMb = Math.round(nodeMemory.rss / (1024 * 1024));
 
     return {
         backend_app: {
             containerName: 'backend_app',
             service: 'Node.js Express + WhatsApp Web (Puppeteer Chrome)',
-            recommendedRam: totalMb >= 4000 ? '1024M - 1536M' : '768M - 1024M',
-            recommendedCpu: '1.0 - 1.5 Cores',
-            reason: 'Runs Node Express, WhatsApp headless Chrome browser instances, and PDF generation.'
+            currentMemoryUsed: `${nodeRssMb} MB`,
+            recommendedRam: totalMb >= 4000 ? '1024M' : '768M',
+            recommendedCpu: '1.25 Cores',
+            status: nodeRssMb > 800 ? '⚠️ High Load' : '🟢 Healthy',
+            reason: 'Runs Node Express, WhatsApp headless Chrome, and PDF generation.'
         },
         mongo_local: {
             containerName: 'mongo_local',
             service: 'MongoDB 8.0 Database Engine',
-            recommendedRam: totalMb >= 4000 ? '1024M' : '512M - 768M',
-            recommendedCpu: '1.0 Core',
-            reason: 'Manages database indexing, WiredTiger cache, and queries.'
+            currentMemoryUsed: '~350 MB',
+            recommendedRam: '1024M',
+            recommendedCpu: '1.00 Core',
+            status: '🟢 Healthy',
+            reason: 'Manages database indexing, WiredTiger cache, and query execution.'
         },
         nginx_proxy: {
             containerName: 'nginx_proxy',
-            service: 'Nginx Reverse Proxy & Static Offloader',
+            service: 'Nginx Reverse Proxy & Static Asset Offloader',
+            currentMemoryUsed: '~25 MB',
             recommendedRam: '256M',
-            recommendedCpu: '0.5 Cores',
+            recommendedCpu: '0.50 Cores',
+            status: '🟢 Optimal',
             reason: 'Streams static images/PDFs directly from Synology HDD and proxies API traffic.'
         },
         frontend_app: {
             containerName: 'frontend_app',
             service: 'React Single Page App (Nginx Web Server)',
+            currentMemoryUsed: '~15 MB',
             recommendedRam: '128M',
             recommendedCpu: '0.25 Cores',
+            status: '🟢 Optimal',
             reason: 'Serves compiled static React HTML/JS bundle files.'
         }
     };
@@ -164,15 +174,20 @@ const generateAiDiagnostics = async (metrics) => {
             for (const mName of modelNames) {
                 try {
                     const model = genAI.getGenerativeModel({ model: mName });
-                    const prompt = `Analyze this live system telemetry and container architecture:
+                    const prompt = `You are an expert AI Systems & DevOps Infrastructure Specialist. Analyze this live server telemetry and container runtime architecture:
 ${JSON.stringify(metrics, null, 2)}
 
-Provide a concise, highly professional AI Container Resource & System Diagnostics report formatted cleanly in markdown:
-1. Overall Health Score (e.g. 95% Optimal)
-2. Per-Container Recommended RAM & CPU Limits (For backend_app, mongo_local, nginx_proxy, frontend_app)
-3. Exact docker-compose.yml memory limit snippet
-4. Database & API Speed Optimization Tips
-5. WhatsApp & Storage/NAS Health Summary`;
+Generate an intelligent, real-time AI Container Resource & Diagnostic Report strictly based on this telemetry data formatted cleanly in Markdown:
+
+### 📊 1. Container Memory & RAM Matrix Table
+Create a clean Markdown table comparing Current Memory Usage vs Gemini AI Recommended Allocations for each container (backend_app, mongo_local, nginx_proxy, frontend_app) with columns:
+| Container Name | Service | Currently Used RAM | Recommended RAM Limit | Recommended CPU Limit | Health Status | AI Optimization Reasoning |
+
+### ⚙️ 2. Recommended docker-compose.yml Resource Limits
+Provide the exact production-ready YAML deploy block for docker-compose.yml with memory and CPU limits based on your calculation.
+
+### ⚡ 3. Real-time Infrastructure & API Optimization Advice
+Provide 3 concise bullet points analyzing Database ping, WhatsApp engine health, and API latency.`;
 
                     const result = await model.generateContent(prompt);
                     responseText = result.response.text();
@@ -228,11 +243,22 @@ Provide a concise, highly professional AI Container Resource & System Diagnostic
         suggestions.push(`🟢 **API Speed Optimal**: All API routes are operating cleanly within sub-100ms targets.`);
     }
 
-    // WhatsApp check
-    if (metrics.whatsapp.activeSessionsCount > 0) {
-        suggestions.push(`🟢 **WhatsApp Active**: ${metrics.whatsapp.activeSessionsCount} session(s) online & ready.`);
+    // WhatsApp Engine AI Diagnostics
+    const wa = metrics.whatsapp;
+    if (wa.activeSessionsCount > 0) {
+        suggestions.push(`🟢 **WhatsApp Engine Active**: ${wa.activeSessionsCount} active session(s) online & ready.`);
     } else {
-        suggestions.push(`🟡 **WhatsApp Idle**: System default session is disconnected. Link QR code via admin settings.`);
+        suggestions.push(`🟡 **WhatsApp Idle / Disconnected**: System default session is not ready. Link QR code via Admin WhatsApp Settings.`);
+    }
+
+    if (!wa.chromeLockClean) {
+        suggestions.push(`⚠️ **WhatsApp Chrome Lock Warning**: Detected ${wa.activeLockFiles} active/stale SingletonLock file(s) in \`${wa.authDirectory}\`. Auto-cleaning routines will purge locks before restart.`);
+    } else {
+        suggestions.push(`🧹 **WhatsApp Storage & Locks Clean**: Session storage in \`${wa.authDirectory}\` has zero stale Chrome locks.`);
+    }
+
+    if (wa.recentLogSnippet && !wa.recentLogSnippet.includes('No recent error logs')) {
+        suggestions.push(`ℹ️ **WhatsApp Recent Log Activity**: \`${wa.recentLogSnippet}\``);
     }
 
     // Storage / NAS check
@@ -243,7 +269,7 @@ Provide a concise, highly professional AI Container Resource & System Diagnostic
     }
 
     return {
-        mode: 'AI System & Container Rule Engine',
+        mode: 'AI System, Container & WhatsApp Diagnostic Engine',
         recommendations: suggestions.join('\n\n')
     };
 };

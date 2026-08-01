@@ -910,6 +910,196 @@ const getAttendanceDetail = async (req, res) => {
     }
 };
 
+const getBulkAttendanceSummaries = async (req, res) => {
+    try {
+        const { employeeIds, month } = req.body;
+        if (!employeeIds || !Array.isArray(employeeIds) || !month) {
+            return res.status(400).json({ success: false, message: 'employeeIds array and month (YYYY-MM) are required' });
+        }
+
+        const [year, mon] = month.split('-').map(Number);
+        const startDate = new Date(year, mon - 1, 1);
+        const endDate   = new Date(year, mon, 1);
+
+        const EmployeeExpense = require('../models/EmployeeExpense');
+        const ScheduleMaster = require('../models/ScheduleMaster');
+        const User = require('../models/User');
+        const AdminLoginLog = require('../models/AdminLoginLog');
+        const mongoose = require('mongoose');
+
+        const validObjIds = employeeIds
+            .filter(id => mongoose.Types.ObjectId.isValid(id))
+            .map(id => new mongoose.Types.ObjectId(id));
+
+        const empRecords = await EmployeeMaster.find({
+            $or: [
+                { _id: { $in: validObjIds } },
+                { empId: { $in: employeeIds } }
+            ]
+        }).lean();
+
+        const empMap = {};
+        empRecords.forEach(emp => {
+            empMap[String(emp._id)] = emp;
+            if (emp.empId) empMap[emp.empId] = emp;
+        });
+
+        const targetObjIds = Object.keys(empMap)
+            .filter(id => mongoose.Types.ObjectId.isValid(id))
+            .map(id => new mongoose.Types.ObjectId(id));
+
+        const allExpenses = await EmployeeExpense.find({
+            employeeId: { $in: targetObjIds },
+            date: { $gte: startDate, $lt: endDate }
+        }).lean();
+
+        const getISTCompLocal = (dateObj = new Date()) => {
+            const istDate = new Date(dateObj.getTime() + (5.5 * 60 * 60 * 1000));
+            return {
+                year: istDate.getUTCFullYear(),
+                month: istDate.getUTCMonth() + 1,
+                day: istDate.getUTCDate()
+            };
+        };
+
+        const empExpensesMap = {};
+        allExpenses.forEach(exp => {
+            const empIdStr = String(exp.employeeId);
+            if (!empExpensesMap[empIdStr]) empExpensesMap[empIdStr] = {};
+            if (exp.date) {
+                const c = getISTCompLocal(new Date(exp.date));
+                const dateStr = `${c.year}-${String(c.month).padStart(2, '0')}-${String(c.day).padStart(2, '0')}`;
+                empExpensesMap[empIdStr][dateStr] = exp;
+            }
+        });
+
+        const now = new Date();
+        const effectiveEnd = endDate > now ? new Date(now.getFullYear(), now.getMonth(), now.getDate(), 23, 59, 59, 999) : endDate;
+
+        const allSchedules = await ScheduleMaster.find({
+            scheduleDate: { $gte: startDate, $lt: effectiveEnd },
+            dayStatus: { $nin: ['Rejected', 'Skipped', 'Paused'] }
+        }).lean();
+
+        const empScheduledDaysMap = {};
+        allSchedules.forEach(s => {
+            if (s.scheduleDate) {
+                const c = getISTCompLocal(new Date(s.scheduleDate));
+                const dateStr = `${c.year}-${String(c.month).padStart(2, '0')}-${String(c.day).padStart(2, '0')}`;
+                
+                const opId = s.operative?._id || s.operative;
+                if (opId) {
+                    const opStr = String(opId);
+                    if (!empScheduledDaysMap[opStr]) empScheduledDaysMap[opStr] = new Set();
+                    empScheduledDaysMap[opStr].add(dateStr);
+                }
+
+                (s.helpers || []).forEach(h => {
+                    const hId = h?._id || h;
+                    if (hId) {
+                        const hStr = String(hId);
+                        if (!empScheduledDaysMap[hStr]) empScheduledDaysMap[hStr] = new Set();
+                        empScheduledDaysMap[hStr].add(dateStr);
+                    }
+                });
+            }
+        });
+
+        const emails = empRecords
+            .map(e => e.email)
+            .filter(em => em && typeof em === 'string' && em.trim().length > 3);
+
+        const adminUsers = emails.length > 0
+            ? await User.find({ email: { $in: emails.map(e => new RegExp(`^${e.trim()}$`, 'i')) }, isAdmin: true }).select('_id email').lean()
+            : [];
+
+        const emailToUserIdMap = {};
+        adminUsers.forEach(u => {
+            if (u.email) emailToUserIdMap[u.email.toLowerCase()] = String(u._id);
+        });
+
+        const adminUserIds = adminUsers.map(u => u._id);
+        const adminLogs = adminUserIds.length > 0
+            ? await AdminLoginLog.find({ userId: { $in: adminUserIds }, dateStr: { $regex: `^${month}-` } }).lean()
+            : [];
+
+        const adminUserLogDaysMap = {};
+        adminLogs.forEach(l => {
+            const uStr = String(l.userId);
+            if (!adminUserLogDaysMap[uStr]) adminUserLogDaysMap[uStr] = new Set();
+            if (l.dateStr) adminUserLogDaysMap[uStr].add(l.dateStr);
+        });
+
+        const daysInMonth = new Date(year, mon, 0).getDate();
+        const istNow = getISTCompLocal(new Date());
+        const todayStr = `${istNow.year}-${String(istNow.month).padStart(2, '0')}-${String(istNow.day).padStart(2, '0')}`;
+
+        const summaries = {};
+
+        empRecords.forEach(emp => {
+            const empIdStr = String(emp._id);
+            const expenseMap = empExpensesMap[empIdStr] || {};
+            const employeeScheduledDays = empScheduledDaysMap[empIdStr] || new Set();
+
+            let adminLogDays = new Set();
+            if (emp.email && emailToUserIdMap[emp.email.toLowerCase()]) {
+                const uId = emailToUserIdMap[emp.email.toLowerCase()];
+                adminLogDays = adminUserLogDaysMap[uId] || new Set();
+            }
+
+            const istEmp = emp.createdAt ? getISTCompLocal(new Date(emp.createdAt)) : { year: 2000, month: 1, day: 1 };
+            const empCreatedDateStr = `${istEmp.year}-${String(istEmp.month).padStart(2, '0')}-${String(istEmp.day).padStart(2, '0')}`;
+
+            let present = 0, absent = 0, halfDay = 0, pending = 0, totalRecorded = 0;
+
+            for (let d = 1; d <= daysInMonth; d++) {
+                const dateStr = `${year}-${String(mon).padStart(2, '0')}-${String(d).padStart(2, '0')}`;
+                if (dateStr < empCreatedDateStr || dateStr > todayStr) continue;
+
+                let attendance = 'Absent';
+                if (expenseMap[dateStr]) {
+                    attendance = expenseMap[dateStr].attendance || 'Present';
+                } else if (adminLogDays.has(dateStr) || employeeScheduledDays.has(dateStr)) {
+                    attendance = 'Present';
+                } else {
+                    let effectiveStatus = emp.status || 'Active';
+                    if (emp.statusHistory && emp.statusHistory.length > 0) {
+                        const history = [...emp.statusHistory].sort((a, b) => new Date(a.timestamp) - new Date(b.timestamp));
+                        const endOfDay = new Date(`${dateStr}T23:59:59.999Z`);
+                        let latestStatusBeforeDate = history[0].status;
+                        for (const record of history) {
+                            if (new Date(record.timestamp) <= endOfDay) {
+                                latestStatusBeforeDate = record.status;
+                            } else {
+                                break;
+                            }
+                        }
+                        effectiveStatus = latestStatusBeforeDate;
+                    }
+                    attendance = (effectiveStatus === 'Deactive') ? 'Deactive' : 'Pending';
+                }
+
+                if (attendance === 'Present') present++;
+                else if (attendance === 'Absent') absent++;
+                else if (attendance === 'Half Day') halfDay++;
+                else if (attendance === 'Pending') pending++;
+                totalRecorded++;
+            }
+
+            summaries[empIdStr] = { present, absent, halfDay, pending, totalRecorded, month };
+            if (emp.empId) summaries[emp.empId] = summaries[empIdStr];
+        });
+
+        res.json({
+            success: true,
+            data: summaries
+        });
+    } catch (error) {
+        console.error('Error in getBulkAttendanceSummaries:', error);
+        res.status(500).json({ success: false, message: error.message });
+    }
+};
+
 module.exports = {
     storeEmployeeMaster,
     updateEmployeeMaster,
@@ -919,5 +1109,6 @@ module.exports = {
     deleteEmployeeMaster,
     updateMonthlyPayment,
     getAttendanceSummary,
+    getBulkAttendanceSummaries,
     getAttendanceDetail
 };

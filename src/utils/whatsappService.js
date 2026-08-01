@@ -541,8 +541,45 @@ const getAllWhatsappHealth = () => {
             hasQr: !!clientQrs.get('system_default')
         });
     }
+
+    // Check Chrome session lock status
+    let lockFilesCount = 0;
+    try {
+        if (fs.existsSync(whatsappAuthPath)) {
+            const checkLocks = (dir) => {
+                const entries = fs.readdirSync(dir, { withFileTypes: true });
+                entries.forEach(entry => {
+                    const full = path.join(dir, entry.name);
+                    if (entry.isDirectory()) {
+                        checkLocks(full);
+                    } else if (LOCK_FILES.includes(entry.name)) {
+                        lockFilesCount++;
+                    }
+                });
+            };
+            checkLocks(whatsappAuthPath);
+        }
+    } catch (_) {}
+
+    // Fetch recent debug log snippets
+    let lastLogSnippet = 'No recent error logs.';
+    try {
+        const logPath = path.join(__dirname, '../../whatsapp_debug.txt');
+        if (fs.existsSync(logPath)) {
+            const content = fs.readFileSync(logPath, 'utf8');
+            const lines = content.trim().split('\n').filter(Boolean);
+            lastLogSnippet = lines.slice(-3).join(' | ');
+        }
+    } catch (_) {}
+
     return {
         activeSessionsCount: sessions.filter(s => s.isReady).length,
+        totalConfiguredSessions: sessions.length,
+        authDirectory: whatsappAuthPath,
+        authDirectoryExists: fs.existsSync(whatsappAuthPath),
+        activeLockFiles: lockFilesCount,
+        chromeLockClean: lockFilesCount === 0,
+        recentLogSnippet: lastLogSnippet,
         sessions
     };
 };
