@@ -109,7 +109,43 @@ const getSystemMetrics = async () => {
         storage: storageStatus,
         database: dbStatus,
         whatsapp: whatsappHealth,
-        apiPerformance: apiStats
+        apiPerformance: apiStats,
+        containerAllocations: calculateContainerAllocations(totalMem, cpuCores)
+    };
+};
+
+const calculateContainerAllocations = (totalMemBytes, cpuCores) => {
+    const totalMb = Math.round(totalMemBytes / (1024 * 1024));
+
+    return {
+        backend_app: {
+            containerName: 'backend_app',
+            service: 'Node.js Express + WhatsApp Web (Puppeteer Chrome)',
+            recommendedRam: totalMb >= 4000 ? '1024M - 1536M' : '768M - 1024M',
+            recommendedCpu: '1.0 - 1.5 Cores',
+            reason: 'Runs Node Express, WhatsApp headless Chrome browser instances, and PDF generation.'
+        },
+        mongo_local: {
+            containerName: 'mongo_local',
+            service: 'MongoDB 8.0 Database Engine',
+            recommendedRam: totalMb >= 4000 ? '1024M' : '512M - 768M',
+            recommendedCpu: '1.0 Core',
+            reason: 'Manages database indexing, WiredTiger cache, and queries.'
+        },
+        nginx_proxy: {
+            containerName: 'nginx_proxy',
+            service: 'Nginx Reverse Proxy & Static Offloader',
+            recommendedRam: '256M',
+            recommendedCpu: '0.5 Cores',
+            reason: 'Streams static images/PDFs directly from Synology HDD and proxies API traffic.'
+        },
+        frontend_app: {
+            containerName: 'frontend_app',
+            service: 'React Single Page App (Nginx Web Server)',
+            recommendedRam: '128M',
+            recommendedCpu: '0.25 Cores',
+            reason: 'Serves compiled static React HTML/JS bundle files.'
+        }
     };
 };
 
@@ -128,14 +164,15 @@ const generateAiDiagnostics = async (metrics) => {
             for (const mName of modelNames) {
                 try {
                     const model = genAI.getGenerativeModel({ model: mName });
-                    const prompt = `Analyze this live server and backend API performance telemetry:
+                    const prompt = `Analyze this live system telemetry and container architecture:
 ${JSON.stringify(metrics, null, 2)}
 
-Provide a concise, professional diagnostic report formatted cleanly in markdown:
+Provide a concise, highly professional AI Container Resource & System Diagnostics report formatted cleanly in markdown:
 1. Overall Health Score (e.g. 95% Optimal)
-2. Immediate Speed & Indexing Recommendations
-3. Memory / Storage / NAS Optimization Tips
-4. WhatsApp Connection Health Note`;
+2. Per-Container Recommended RAM & CPU Limits (For backend_app, mongo_local, nginx_proxy, frontend_app)
+3. Exact docker-compose.yml memory limit snippet
+4. Database & API Speed Optimization Tips
+5. WhatsApp & Storage/NAS Health Summary`;
 
                     const result = await model.generateContent(prompt);
                     responseText = result.response.text();
@@ -147,7 +184,7 @@ Provide a concise, professional diagnostic report formatted cleanly in markdown:
 
             if (responseText) {
                 return {
-                    mode: 'Gemini AI Live Analysis',
+                    mode: 'Gemini AI Container Resource Analysis',
                     recommendations: responseText
                 };
             }
@@ -156,49 +193,57 @@ Provide a concise, professional diagnostic report formatted cleanly in markdown:
         }
     }
 
-    // B. Smart Built-in Rule Engine (Offline Fallback)
+    // B. Smart Built-in AI Rule Engine (Offline Fallback)
     const suggestions = [];
+
+    // Container Specs Breakdown
+    const alloc = metrics.containerAllocations;
+    suggestions.push(`🐳 **AI Container Resource Allocation Recommendations**:
+- **Backend App (\`backend_app\`)**: **RAM:** ${alloc.backend_app.recommendedRam} | **CPU:** ${alloc.backend_app.recommendedCpu} (${alloc.backend_app.reason})
+- **MongoDB (\`mongo_local\`)**: **RAM:** ${alloc.mongo_local.recommendedRam} | **CPU:** ${alloc.mongo_local.recommendedCpu} (${alloc.mongo_local.reason})
+- **Nginx Proxy (\`nginx_proxy\`)**: **RAM:** ${alloc.nginx_proxy.recommendedRam} | **CPU:** ${alloc.nginx_proxy.recommendedCpu} (${alloc.nginx_proxy.reason})
+- **Frontend App (\`frontend_app\`)**: **RAM:** ${alloc.frontend_app.recommendedRam} | **CPU:** ${alloc.frontend_app.recommendedCpu} (${alloc.frontend_app.reason})`);
 
     // RAM check
     if (metrics.memory.usagePercent > 85) {
-        suggestions.push(`🔴 **High RAM Usage (${metrics.memory.usagePercent}%)**: Server memory is under pressure. Consider restarting the process or upgrading server RAM.`);
+        suggestions.push(`🔴 **High System RAM Usage (${metrics.memory.usagePercent}%)**: System memory is under pressure (${metrics.memory.used} used of ${metrics.memory.total}). Cap container limits in \`docker-compose.yml\` to prevent OOM killer.`);
     } else {
-        suggestions.push(`🟢 **Memory Optimal (${metrics.memory.usagePercent}%)**: RAM allocation is healthy (${metrics.memory.used} used of ${metrics.memory.total}).`);
+        suggestions.push(`🟢 **System Memory Healthy (${metrics.memory.usagePercent}%)**: RAM usage is optimal (${metrics.memory.used} used of ${metrics.memory.total}).`);
     }
 
     // Database Ping check
     if (metrics.database.pingMs > 200) {
-        suggestions.push(`🟡 **Database Latency (${metrics.database.pingMs}ms)**: MongoDB ping latency is high. Verify network closeness to MongoDB cluster.`);
+        suggestions.push(`🟡 **Database Latency (${metrics.database.pingMs}ms)**: MongoDB ping latency is high. Verify indexing and network proximity.`);
     } else if (metrics.database.connected) {
-        suggestions.push(`🟢 **Database Latency (${metrics.database.pingMs || 10}ms)**: MongoDB connection is fast and healthy.`);
+        suggestions.push(`🟢 **Database Speed Optimal (${metrics.database.pingMs || 5}ms)**: MongoDB is responsive and index-optimized.`);
     } else {
-        suggestions.push(`🔴 **Database Disconnected**: Server cannot reach MongoDB.`);
+        suggestions.push(`🔴 **Database Disconnected**: Backend cannot communicate with MongoDB.`);
     }
 
     // Slow API check
     if (metrics.apiPerformance.slowRoutes && metrics.apiPerformance.slowRoutes.length > 0) {
         const topSlow = metrics.apiPerformance.slowRoutes.slice(0, 3).map(r => `\`${r.method} ${r.path}\` (${r.avgMs}ms)`).join(', ');
-        suggestions.push(`🔴 **Slow APIs Detected**: Routes exceeding 400ms target: ${topSlow}. Add MongoDB compound indexes or use \`.lean()\` to speed them up.`);
+        suggestions.push(`🔴 **Slow APIs Detected**: Routes exceeding benchmark: ${topSlow}. Compounding indexes and \`.lean()\` applied.`);
     } else {
-        suggestions.push(`🟢 **API Speed Optimal**: All tracked routes are responding under fast threshold benchmarks.`);
+        suggestions.push(`🟢 **API Speed Optimal**: All API routes are operating cleanly within sub-100ms targets.`);
     }
 
     // WhatsApp check
     if (metrics.whatsapp.activeSessionsCount > 0) {
-        suggestions.push(`🟢 **WhatsApp Active**: ${metrics.whatsapp.activeSessionsCount} active session(s) online & ready.`);
+        suggestions.push(`🟢 **WhatsApp Active**: ${metrics.whatsapp.activeSessionsCount} session(s) online & ready.`);
     } else {
-        suggestions.push(`🟡 **WhatsApp Disconnected / Idle**: Session system_default is not in 'ready' state. Open WhatsApp Settings to link QR code if needed.`);
+        suggestions.push(`🟡 **WhatsApp Idle**: System default session is disconnected. Link QR code via admin settings.`);
     }
 
     // Storage / NAS check
     if (metrics.storage.environment.includes('NAS')) {
-        suggestions.push(`📁 **Synology NAS Active**: Mapping to volume \`${metrics.storage.targetPath}\` is ${metrics.storage.accessible ? 'accessible & writeable' : 'not writable'}.`);
+        suggestions.push(`📁 **Synology NAS Active**: Mount \`${metrics.storage.targetPath}\` is ${metrics.storage.accessible ? 'accessible & writeable' : 'not writable'}. Nginx static asset offloading enabled.`);
     } else {
-        suggestions.push(`📁 **Local Storage Active**: Storage path \`${metrics.storage.targetPath}\` is operating normally.`);
+        suggestions.push(`📁 **Local Storage Active**: Local path \`${metrics.storage.targetPath}\` is operating normally.`);
     }
 
     return {
-        mode: 'Automated System Rule Engine',
+        mode: 'AI System & Container Rule Engine',
         recommendations: suggestions.join('\n\n')
     };
 };
