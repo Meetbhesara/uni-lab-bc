@@ -83,22 +83,25 @@ const sendFollowUpReminders = async () => {
             await e.save();
         }
 
-        // ─── 1. BUILD DATE BOUNDARY (UP TO END OF TODAY) ─────────────────────
+        // ─── 1. BUILD DATE BOUNDARY (EXACTLY TODAY) ─────────────────────
+        const todayStart = new Date();
+        todayStart.setHours(0, 0, 0, 0);
+
         const todayEnd = new Date();
         todayEnd.setHours(23, 59, 59, 999);
 
-        // Find all open quotations where nextFollowUp <= todayEnd AND is latest revision
+        // Find all open quotations where nextFollowUp is EXACTLY today AND is latest revision
         const dueQuotations = await Quotation.find({
             status: { $nin: ['Done', 'Reject', 'done', 'reject'] },
             isLatest: { $ne: false },  // Include true and documents where isLatest was not explicitly set to false
-            nextFollowUp: { $lte: todayEnd, $ne: null }
+            nextFollowUp: { $gte: todayStart, $lte: todayEnd }
         }).populate('enquiry');
 
-        // Find all open whatsapp enquiries where nextFollowUp <= todayEnd
+        // Find all open whatsapp enquiries where nextFollowUp is EXACTLY today
         const dueEnquiries = await Enquiry.find({
             type: 'whatsapp',
             status: { $nin: ['Done', 'Reject', 'done', 'reject'] },
-            nextFollowUp: { $lte: todayEnd, $ne: null }
+            nextFollowUp: { $gte: todayStart, $lte: todayEnd }
         });
 
         if (dueQuotations.length === 0 && dueEnquiries.length === 0) {
@@ -113,13 +116,13 @@ const sendFollowUpReminders = async () => {
         const targetUsers = allUsers.filter(u => {
             if (u.isSuperAdmin) return true;
             const perms = u.permissions || {};
-            // Check enquiry read permission (check common key names)
+            
+            // Send ONLY to admins who have at least one of the Enquiry tabs READ permission
             return (
-                perms?.enquiry?.read === true ||
                 perms?.enquiries?.read === true ||
-                perms?.outgoingEnquiry?.read === true ||
-                perms?.enquiryTab?.read === true ||
-                perms?.outgoingEnquiries?.read === true
+                perms?.incomingEnquiries?.read === true ||
+                perms?.outboundQuotations?.read === true ||
+                perms?.processedHistory?.read === true
             );
         }).filter(u => u.phone); // Only include users with a phone number
 
@@ -203,7 +206,7 @@ const sendFollowUpReminders = async () => {
  */
 const startFollowUpCron = () => {
     // Runs every day at 12:02 PM IST (cron: minute=2, hour=12)
-    cron.schedule('2 12 * * *', () => {
+    cron.schedule('2 11 * * *', () => {
         console.log('[FollowUpCron] ⏰ Cron triggered at 12:02 PM');
         sendFollowUpReminders();
     }, {
