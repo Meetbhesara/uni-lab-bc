@@ -1,14 +1,13 @@
-const { Client, LocalAuth, MessageMedia } = require('whatsapp-web.js');
+const { makeWASocket, useMultiFileAuthState, DisconnectReason, fetchLatestBaileysVersion } = require('@whiskeysockets/baileys');
+const pino = require('pino');
 const qrcodeTerminal = require('qrcode-terminal');
 const fs = require('fs');
 const path = require('path');
-const { execSync } = require('child_process');
 const { broadcast } = require('./sseManager');
 
 const notifyStatusChange = (sessionId, status, qr = null) => {
-    try {
-        broadcast('whatsapp-status-changed', { sessionId, status, qr });
-    } catch (_) {}
+    clientStatus.set(sessionId, status);
+    broadcast('whatsapp-status-changed', { sessionId, status, qr });
 };
 
 // Resolve path to storage (respecting NAS vs Local)
@@ -21,56 +20,6 @@ const whatsappAuthPath = useNasFlag === 'true'
 if (!fs.existsSync(whatsappAuthPath)) {
     fs.mkdirSync(whatsappAuthPath, { recursive: true });
 }
-
-// ── Kill orphaned Chrome processes holding locks on session folder ───────────
-const killOrphanedChrome = (sessionId) => {
-    try {
-        const targetPattern = `session-${sessionId}`;
-        console.log(`[WhatsApp] 🔍 Checking for orphaned Chrome processes locking session: ${sessionId}`);
-        if (process.platform === 'win32') {
-            const psScript = `Get-CimInstance Win32_Process -Filter "name = 'chrome.exe'" | Where-Object { $_.CommandLine -and $_.CommandLine.Contains('${targetPattern}') } | ForEach-Object { Stop-Process -Id $_.ProcessId -Force -ErrorAction SilentlyContinue }`;
-            const encodedScript = Buffer.from(psScript, 'utf16le').toString('base64');
-            execSync(`powershell -NoProfile -ExecutionPolicy Bypass -EncodedCommand ${encodedScript}`, { stdio: 'ignore' });
-        } else {
-            execSync(`pkill -9 -f "${targetPattern}"`, { stdio: 'ignore' });
-        }
-    } catch (e) {
-        // Silently ignore if no matching process found or permission issue
-    }
-};
-
-// ── Clean stale Chrome lock files (RECURSIVE) ───────────────────────────────
-// Chrome leaves SingletonLock files when a Docker container is killed/restarted.
-// These locks are stored inside nested subdirectories of the Chrome profile.
-// We recursively walk the entire session folder to find and delete them all.
-const LOCK_FILES = ['SingletonLock', 'SingletonCookie', 'SingletonSocket', 'DevToolsActivePort', 'LOCK', 'LOCK.lock'];
-
-const deleteLockFilesIn = (dir) => {
-    if (!fs.existsSync(dir)) return;
-    let entries;
-    try { entries = fs.readdirSync(dir, { withFileTypes: true }); } catch { return; }
-    entries.forEach(entry => {
-        const fullPath = path.join(dir, entry.name);
-        if (entry.isDirectory()) {
-            deleteLockFilesIn(fullPath); // recurse into subdirectories
-        } else if (LOCK_FILES.includes(entry.name)) {
-            try {
-                fs.unlinkSync(fullPath);
-                console.log(`[WhatsApp] 🧹 Deleted lock file: ${fullPath}`);
-            } catch (err) {
-                // Ignore EBUSY or ENOENT errors when cleaning stale locks
-            }
-        }
-    });
-};
-
-const cleanChromeLock = (sessionId) => {
-    killOrphanedChrome(sessionId);
-    const sessionPath = path.join(whatsappAuthPath, `session-${sessionId}`);
-    console.log(`[WhatsApp] 🧹 Scanning for stale Chrome locks in: ${sessionPath}`);
-    deleteLockFilesIn(sessionPath);
-};
-// ───────────────────────────────────────────────────────────────────
 
 // In-memory mappings
 const clients = new Map();
@@ -89,7 +38,6 @@ const logToFile = (msg, obj = '') => {
     }
 };
 
-// Clear safety fallback timer
 const clearInitTimer = (sessionId) => {
     if (initializeTimers.has(sessionId)) {
         clearTimeout(initializeTimers.get(sessionId));
@@ -97,12 +45,11 @@ const clearInitTimer = (sessionId) => {
     }
 };
 
-// Gracefully destroy all clients on server shutdown or restart
 const destroyAll = async () => {
     console.log('[WhatsApp] 🛑 Destroying all active WhatsApp clients...');
-    for (const [sessionId, client] of clients.entries()) {
+    for (const [sessionId, sock] of clients.entries()) {
         try {
-            await client.destroy();
+            sock.ws.close();
             console.log(`[WhatsApp] Closed client ${sessionId}`);
         } catch (e) {
             console.error(`[WhatsApp] Error destroying client ${sessionId}:`, e.message);
@@ -113,9 +60,8 @@ const destroyAll = async () => {
     clientQrs.clear();
 };
 
-// Register graceful shutdown listeners
 const handleGracefulShutdown = async (signal) => {
-    console.log(`[WhatsApp] Received ${signal}. Closing browser instances...`);
+    console.log(`[WhatsApp] Received ${signal}. Closing socket instances...`);
     await destroyAll();
 };
 
@@ -132,183 +78,181 @@ process.once('SIGUSR2', async () => {
     process.kill(process.pid, 'SIGUSR2');
 });
 
-// Initialize a specific session with automatic retries
-const initialize = async (sessionId = 'system_default', attempt = 1, maxAttempts = 3) => {
+const initialize = async (sessionId = 'system_default', attempt = 1, maxAttempts = 3, phoneNumber = null) => {
     if (clients.has(sessionId)) {
         const status = clientStatus.get(sessionId);
-        if (status === 'initializing' || status === 'ready' || status === 'qr') {
-            console.log(`[WhatsApp] Session ${sessionId} is already ${status}.`);
+        if (status === 'initializing' || status === 'ready') {
+            console.log(`[WhatsApp] Session ${sessionId} is already ${status}. Skipping initialize.`);
+            notifyStatusChange(sessionId, status, clientQrs.get(sessionId));
             return;
         }
-        // Clean up old instance if disconnected to release Chrome locks
-        const oldClient = clients.get(sessionId);
+        if (status === 'qr') {
+            if (phoneNumber) {
+                console.log(`[WhatsApp] Upgrading session ${sessionId} from QR to Pairing Code...`);
+                const existingSock = clients.get(sessionId);
+                if (existingSock) {
+                    try {
+                        let formattedNumber = phoneNumber.replace(/[^0-9]/g, '');
+                        const code = await existingSock.requestPairingCode(formattedNumber);
+                        console.log(`\n======================================================`);
+                        console.log(`[WhatsApp] Pairing Code for ${formattedNumber}: ${code}`);
+                        console.log(`Enter this code on your WhatsApp mobile app under "Linked Devices" > "Link with phone number instead"`);
+                        console.log(`======================================================\n`);
+                        clientQrs.set(sessionId, code);
+                        notifyStatusChange(sessionId, 'pairing_code', code);
+                        return; // Upgraded successfully, stop initialization!
+                    } catch (err) {
+                        console.error(`[WhatsApp] Failed to upgrade session ${sessionId} to pairing code:`, err);
+                    }
+                }
+            } else {
+                console.log(`[WhatsApp] Session ${sessionId} is already qr.`);
+                notifyStatusChange(sessionId, 'qr', clientQrs.get(sessionId));
+                return;
+            }
+        }
+        
+        // If we reach here, we are intentionally recreating the socket.
+        // Mark it so it doesn't auto-reconnect in the background.
+        const oldSock = clients.get(sessionId);
         clients.delete(sessionId);
-        if (oldClient) {
-            try {
-                await oldClient.destroy();
-            } catch (e) {}
+        if (oldSock) {
+            oldSock.ev.removeAllListeners('connection.update'); // Stop ghost reconnects
+            try { oldSock.ws.close(); } catch (e) {}
         }
     }
 
     console.log(`[WhatsApp] Initializing WhatsApp Client for session: ${sessionId} (attempt ${attempt}/${maxAttempts})`);
     logToFile(`Initializing session: ${sessionId} (attempt ${attempt}/${maxAttempts})`);
 
-    // 🧹 Always clean stale Chrome lock files before starting
-    cleanChromeLock(sessionId);
-
     clientStatus.set(sessionId, 'initializing');
     clientQrs.delete(sessionId);
     notifyStatusChange(sessionId, 'initializing');
 
-    // Clear existing timer if any
     clearInitTimer(sessionId);
-
-    // Set 300-second (5 minute) fallback safety timeout
     const fallbackTimer = setTimeout(async () => {
         if (clientStatus.get(sessionId) === 'initializing') {
-            console.warn(`[WhatsApp] ⏱️ Session ${sessionId} initialization timed out after 300s. Resetting status to disconnected.`);
+            console.warn(`[WhatsApp] ⏱️ Session ${sessionId} initialization timed out after 300s.`);
             logToFile(`Session ${sessionId} initialization timed out after 300s`);
             clientStatus.set(sessionId, 'disconnected');
             notifyStatusChange(sessionId, 'disconnected');
-            const stuckClient = clients.get(sessionId);
-            if (stuckClient) {
+            const stuckSock = clients.get(sessionId);
+            if (stuckSock) {
                 clients.delete(sessionId);
-                try {
-                    await stuckClient.destroy();
-                } catch (err) {
-                    console.error(`[WhatsApp] Error destroying timed-out client ${sessionId}:`, err.message);
-                }
+                try { stuckSock.ws.close(); } catch (err) {}
             }
         }
         initializeTimers.delete(sessionId);
     }, 300000);
     initializeTimers.set(sessionId, fallbackTimer);
 
-    const client = new Client({
-        authStrategy: new LocalAuth({ 
-            clientId: sessionId, 
-            dataPath: whatsappAuthPath 
-        }),
-        puppeteer: {
-            headless: true,
-            args: [
-                '--no-sandbox',
-                '--disable-setuid-sandbox',
-                '--disable-dev-shm-usage',
-                '--disable-gpu',
-                '--no-zygote',
-                '--ignore-profile-dir-locked',   // force-ignore stale lock files
-                '--disable-features=IsolateOrigins,site-per-process',
-                '--user-agent=Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36'
-            ]
-        },
-        webVersionCache: {
-            type: 'local'
+    const sessionFolder = path.join(whatsappAuthPath, `session-${sessionId}`);
+    const { state, saveCreds } = await useMultiFileAuthState(sessionFolder);
+    const { version, isLatest } = await fetchLatestBaileysVersion();
+
+    const sock = makeWASocket({
+        version,
+        logger: pino({ level: 'info' }), 
+        printQRInTerminal: false,
+        auth: state,
+        markOnlineOnConnect: false
+    });
+
+    clients.set(sessionId, sock);
+    
+    sock.ev.on('creds.update', saveCreds);
+
+    sock.ev.on('connection.update', async (update) => {
+        const { connection, lastDisconnect, qr } = update;
+
+        if (qr) {
+            clearInitTimer(sessionId);
+            clientStatus.set(sessionId, 'qr');
+            clientQrs.set(sessionId, qr);
+            
+            if (phoneNumber && !sock.authState.creds.registered) {
+                // Request pairing code ONLY when socket is fully ready (proven by QR generation)
+                (async () => {
+                    try {
+                        let formattedNumber = phoneNumber.replace(/[^0-9]/g, '');
+                        const code = await sock.requestPairingCode(formattedNumber);
+                        console.log(`\n======================================================`);
+                        console.log(`[WhatsApp] Pairing Code for ${formattedNumber}: ${code}`);
+                        console.log(`Enter this code on your WhatsApp mobile app under "Linked Devices" > "Link with phone number instead"`);
+                        console.log(`======================================================\n`);
+                        clientQrs.set(sessionId, code);
+                        notifyStatusChange(sessionId, 'pairing_code', code);
+                    } catch (err) {
+                        console.error(`[WhatsApp] Failed to request pairing code:`, err.message || err);
+                        notifyStatusChange(sessionId, 'qr', qr);
+                    }
+                })();
+            } else {
+                notifyStatusChange(sessionId, 'qr', qr);
+                
+                if (sessionId === 'system_default') {
+                    console.log(`\n--- WHATSAPP SYSTEM DEFAULT QR CODE ---`);
+                    qrcodeTerminal.generate(qr, { small: true });
+                    console.log('Scan the QR code above with your WhatsApp app to connect!\n');
+                } else {
+                    console.log(`[WhatsApp] Session ${sessionId} generated a QR code.`);
+                }
+            }
         }
-    });
 
-    // Save client instance immediately
-    clients.set(sessionId, client);
-
-    client.on('qr', (qr) => {
-        clearInitTimer(sessionId);
-        clientStatus.set(sessionId, 'qr');
-        clientQrs.set(sessionId, qr);
-        notifyStatusChange(sessionId, 'qr', qr);
-        if (sessionId === 'system_default') {
-            console.log(`\n--- WHATSAPP SYSTEM DEFAULT QR CODE ---`);
-            qrcodeTerminal.generate(qr, { small: true });
-            console.log('Scan the QR code above with your WhatsApp app to connect!\n');
-        } else {
-            console.log(`[WhatsApp] Session ${sessionId} generated a QR code.`);
-        }
-    });
-
-    client.on('ready', () => {
-        clearInitTimer(sessionId);
-        console.log(`[WhatsApp] Session ${sessionId} is READY!`);
-        logToFile(`Session ${sessionId} is READY`);
-        clientStatus.set(sessionId, 'ready');
-        clientQrs.delete(sessionId);
-        notifyStatusChange(sessionId, 'ready');
-    });
-
-    client.on('auth_failure', msg => {
-        clearInitTimer(sessionId);
-        console.error(`[WhatsApp] Session ${sessionId} Auth failure:`, msg);
-        logToFile(`Session ${sessionId} Auth failure`, { message: msg });
-        clientStatus.set(sessionId, 'disconnected');
-        clientQrs.delete(sessionId);
-        notifyStatusChange(sessionId, 'disconnected');
-    });
-
-    client.on('disconnected', (reason) => {
-        clearInitTimer(sessionId);
-        console.error(`[WhatsApp] Session ${sessionId} disconnected:`, reason);
-        logToFile(`Session ${sessionId} disconnected`, { reason });
-        clientStatus.set(sessionId, 'disconnected');
-        clientQrs.delete(sessionId);
-        notifyStatusChange(sessionId, 'disconnected');
-
-        // Attempt automatic restart if it is system_default
-        if (sessionId === 'system_default') {
-            console.log('Attempting to re-initialize system default client...');
-            client.destroy().then(() => {
-                initialize('system_default');
-            }).catch(err => {
-                console.error('Error destroying system default client:', err);
-                initialize('system_default');
-            });
-        } else {
-            client.destroy().catch(() => {});
-            clients.delete(sessionId);
-        }
-    });
-
-    client.initialize().catch(async (err) => {
-        clearInitTimer(sessionId);
-        console.error(`[WhatsApp] Session ${sessionId} initialization error (attempt ${attempt}/${maxAttempts}):`, err.message);
-        
-        // Clean up stuck client instance safely
-        clients.delete(sessionId);
-        try { await client.destroy(); } catch (e) {}
-
-        if (attempt < maxAttempts) {
-            console.log(`[WhatsApp] ⏳ Retrying session ${sessionId} in 3 seconds...`);
-            setTimeout(() => {
-                initialize(sessionId, attempt + 1, maxAttempts);
-            }, 3000);
-        } else {
-            clientStatus.set(sessionId, 'disconnected');
+        if (connection === 'close') {
+            clearInitTimer(sessionId);
+            const shouldReconnect = (lastDisconnect?.error?.output?.statusCode !== DisconnectReason.loggedOut);
+            console.error(`[WhatsApp] Session ${sessionId} disconnected due to:`, lastDisconnect?.error?.message || lastDisconnect?.error);
+            logToFile(`Session ${sessionId} disconnected`, { reason: lastDisconnect?.error?.message });
+            
+            if (shouldReconnect) {
+                console.log(`[WhatsApp] Reconnecting session ${sessionId}...`);
+                setTimeout(() => initialize(sessionId, attempt, maxAttempts, phoneNumber), 3000);
+            } else {
+                console.log(`[WhatsApp] Session ${sessionId} logged out. Removing credentials.`);
+                clientStatus.set(sessionId, 'disconnected');
+                clientQrs.delete(sessionId);
+                notifyStatusChange(sessionId, 'disconnected');
+                
+                clients.delete(sessionId);
+                // Remove folder if logged out
+                if (fs.existsSync(sessionFolder)) {
+                    fs.rmSync(sessionFolder, { recursive: true, force: true });
+                }
+            }
+        } else if (connection === 'open') {
+            clearInitTimer(sessionId);
+            console.log(`[WhatsApp] Session ${sessionId} is READY!`);
+            logToFile(`Session ${sessionId} is READY`);
+            clientStatus.set(sessionId, 'ready');
             clientQrs.delete(sessionId);
-            console.error(`[WhatsApp] ❌ Session ${sessionId} failed to initialize after ${maxAttempts} attempts.`);
+            notifyStatusChange(sessionId, 'ready');
         }
     });
 };
 
-// Disconnect a session and clean up its filesystem credentials
 const disconnect = async (sessionId) => {
     console.log(`[WhatsApp] Disconnecting session: ${sessionId}`);
     logToFile(`Disconnecting session: ${sessionId}`);
     
     clearInitTimer(sessionId);
-    const client = clients.get(sessionId);
-    if (client) {
+    const sock = clients.get(sessionId);
+    if (sock) {
         try {
-            await client.destroy();
+            await sock.logout();
         } catch (e) {
-            console.error(`Error destroying client ${sessionId}:`, e.message);
+            console.error(`Error logging out ${sessionId}:`, e.message);
+            try { sock.ws.close(); } catch(e2) {}
         }
         clients.delete(sessionId);
     }
     
     clientStatus.set(sessionId, 'disconnected');
     clientQrs.delete(sessionId);
+    notifyStatusChange(sessionId, 'disconnected');
 
-    // Give process brief moment to release handles before deleting files
-    await new Promise(resolve => setTimeout(resolve, 1000));
-
-    // Delete session files on explicit disconnect
+    // Delete session files
     const sessionFolder = path.join(whatsappAuthPath, `session-${sessionId}`);
     if (fs.existsSync(sessionFolder)) {
         try {
@@ -320,25 +264,23 @@ const disconnect = async (sessionId) => {
     }
 };
 
-// Scan directory and boot all stored sessions
-const initializeAll = () => {
-    console.log('[WhatsApp] 🚀 Starting all sessions — cleaning stale locks first...');
+const initializeAll = async () => {
+    console.log('[WhatsApp] Starting all configured sessions...');
+    
+    await initialize('system_default', 1, 3);
 
-    // Pre-clean ALL session lock files before any initialization
-    // This is critical on Docker container restarts
+    // Admin sessions are now stored via MultiFileAuthState in different folders in whatsappAuthPath just in case
     try {
         if (fs.existsSync(whatsappAuthPath)) {
             const files = fs.readdirSync(whatsappAuthPath);
             files.forEach(file => {
-                if (file.startsWith('session-')) {
-                    const sessionId = file.replace('session-', '');
-                    cleanChromeLock(sessionId);
+                const fullPath = path.join(whatsappAuthPath, file);
+                if (fs.statSync(fullPath).isFile()) {
+                    fs.unlinkSync(fullPath);
                 }
             });
         }
-    } catch (e) {
-        console.warn('[WhatsApp] Pre-clean warning:', e.message);
-    }
+    } catch (e) {}
 
     // 1. Initialize system_default
     initialize('system_default');
@@ -348,11 +290,9 @@ const initializeAll = () => {
         if (fs.existsSync(whatsappAuthPath)) {
             const files = fs.readdirSync(whatsappAuthPath);
             files.forEach(file => {
-                if (file.startsWith('session-')) {
+                if (file.startsWith('session-') && file !== 'session-system_default') {
                     const sessionId = file.replace('session-', '');
-                    if (sessionId !== 'system_default') {
-                        initialize(sessionId);
-                    }
+                    initialize(sessionId);
                 }
             });
         }
@@ -361,34 +301,37 @@ const initializeAll = () => {
     }
 };
 
-// Resolve which client to use based on target and OTP rules
 const resolveClient = (adminId, isOtp = false) => {
-    if (isOtp) {
-        return { client: clients.get('system_default'), id: 'system_default' };
-    }
+    if (isOtp) return { sock: clients.get('system_default'), id: 'system_default' };
 
     if (adminId) {
         const adminSessionId = `admin_${adminId}`;
-        const adminClient = clients.get(adminSessionId);
+        const adminSock = clients.get(adminSessionId);
         const status = clientStatus.get(adminSessionId);
         
-        if (adminClient && status === 'ready') {
-            return { client: adminClient, id: adminSessionId };
+        if (adminSock && status === 'ready') {
+            return { sock: adminSock, id: adminSessionId };
         } else {
-            // Strictly fail admin messages if the admin session is not ready, do not fallback to system_default
-            return { client: null, id: adminSessionId };
+            return { sock: null, id: adminSessionId };
         }
     }
 
-    // Only use system_default when there is no admin context (e.g., system level actions)
-    return { client: clients.get('system_default'), id: 'system_default' };
+    return { sock: clients.get('system_default'), id: 'system_default' };
+};
+
+// Formats phone numbers correctly for Baileys
+const formatPhoneForBaileys = (phone) => {
+    let cleanPhone = phone.replace(/\D/g, '');
+    if (cleanPhone.startsWith('0')) cleanPhone = cleanPhone.substring(1);
+    if (cleanPhone.length === 10) cleanPhone = '91' + cleanPhone;
+    return `${cleanPhone}@s.whatsapp.net`;
 };
 
 const sendWhatsapp = async (phone, message, adminId = null, isOtp = false) => {
-    const { client, id } = resolveClient(adminId, isOtp);
+    const { sock, id } = resolveClient(adminId, isOtp);
     const status = clientStatus.get(id);
 
-    if (!client || status !== 'ready') {
+    if (!sock || status !== 'ready') {
         logToFile(`sendWhatsapp Failed - Session ${id} not ready`, { phone, status });
         throw new Error(`WhatsApp client session "${id}" is not ready yet!`);
     }
@@ -396,34 +339,28 @@ const sendWhatsapp = async (phone, message, adminId = null, isOtp = false) => {
     console.log(`[WhatsApp] Sending via session: ${id} to phone: ${phone}`);
     logToFile(`Sending via session: ${id} to: ${phone}`, { message });
 
-    let cleanPhone = phone.replace(/\D/g, '');
-    if (cleanPhone.startsWith('0')) cleanPhone = cleanPhone.substring(1);
-    if (cleanPhone.length === 10) cleanPhone = '91' + cleanPhone;
-
-    const targetId = `${cleanPhone}@c.us`;
+    const targetJid = formatPhoneForBaileys(phone);
     try {
-        const result = await client.sendMessage(targetId, message);
-        logToFile(`Message sent successfully from session ${id} to ${targetId}`);
-        return result;
-    } catch (e) {
-        console.error(`[WhatsApp] Failed to send message from session ${id}:`, e);
-        logToFile(`Error sending from session ${id} to ${cleanPhone}`, { error: e.message });
-        
-        if (e.message && e.message.includes('detached Frame')) {
-            console.error(`[WhatsApp] Detached frame in session ${id}. Destroying client...`);
-            clientStatus.set(id, 'disconnected');
-            client.destroy().then(() => initialize(id)).catch(() => initialize(id));
+        const [result] = await sock.onWhatsApp(targetJid);
+        if (!result || !result.exists) {
+            console.log(`[WhatsApp] Phone ${phone} is not on WhatsApp.`);
         }
         
+        const sendResult = await sock.sendMessage(targetJid, { text: message });
+        logToFile(`Message sent successfully from session ${id} to ${targetJid}`);
+        return sendResult;
+    } catch (e) {
+        console.error(`[WhatsApp] Failed to send message from session ${id}:`, e);
+        logToFile(`Error sending from session ${id} to ${targetJid}`, { error: e.message });
         throw new Error(e.message || "Failed to send WhatsApp message.");
     }
 };
 
 const sendWhatsappMedia = async (phone, fileUrl, caption, adminId = null) => {
-    const { client, id } = resolveClient(adminId, false);
+    const { sock, id } = resolveClient(adminId, false);
     const status = clientStatus.get(id);
 
-    if (!client || status !== 'ready') {
+    if (!sock || status !== 'ready') {
         logToFile(`sendWhatsappMedia Failed - Session ${id} not ready`, { phone, fileUrl, status });
         throw new Error(`WhatsApp client session "${id}" is not ready yet!`);
     }
@@ -431,16 +368,11 @@ const sendWhatsappMedia = async (phone, fileUrl, caption, adminId = null) => {
     console.log(`[WhatsApp] Sending media via session: ${id} to: ${phone}`);
     logToFile(`Sending media via session: ${id} to: ${phone}`, { fileUrl, caption });
 
-    let cleanPhone = phone.replace(/\D/g, '');
-    if (cleanPhone.startsWith('0')) cleanPhone = cleanPhone.substring(1);
-    if (cleanPhone.length === 10) cleanPhone = '91' + cleanPhone;
-
-    const targetId = `${cleanPhone}@c.us`;
+    const targetJid = formatPhoneForBaileys(phone);
     try {
         const isPdf = fileUrl.toLowerCase().includes('.pdf');
-        let media;
-
-        // 1. Try to resolve the URL locally (handles NAS vs Local paths)
+        
+        // Resolve URL locally (respecting NAS vs Local)
         let localPath = null;
         if (fileUrl) {
             let relativePath = fileUrl.trim();
@@ -448,11 +380,8 @@ const sendWhatsappMedia = async (phone, fileUrl, caption, adminId = null) => {
                 try {
                     const urlObj = new URL(relativePath);
                     relativePath = urlObj.pathname;
-                } catch (e) {
-                    console.error('[WhatsApp] Failed to parse URL:', relativePath);
-                }
+                } catch (e) {}
             }
-            
             try { relativePath = decodeURIComponent(relativePath); } catch (e) {}
             relativePath = relativePath.replace(/\\/g, '/');
 
@@ -463,7 +392,6 @@ const sendWhatsappMedia = async (phone, fileUrl, caption, adminId = null) => {
             if (relativePath.includes('/uploads/')) {
                 const subPathParts = relativePath.split('/uploads/');
                 const subPath = subPathParts[subPathParts.length - 1];
-
                 if (useNas) {
                     localPath = path.join(nasRoot, subPath);
                 } else {
@@ -471,47 +399,52 @@ const sendWhatsappMedia = async (phone, fileUrl, caption, adminId = null) => {
                     localPath = path.join(baseDir, subPath);
                 }
             }
-            
-            // Fallback if not found yet
             if ((!localPath || !fs.existsSync(localPath)) && relativePath.startsWith('/api/')) {
                 localPath = path.join(process.cwd(), relativePath.replace('/api/', ''));
             }
         }
         
-        // 2. Load the media (prioritize direct filesystem access to bypass network loopback issues)
+        let messagePayload = {};
+
         if (localPath && fs.existsSync(localPath)) {
             console.log(`[WhatsApp] Resolving media locally from path: ${localPath}`);
-            media = MessageMedia.fromFilePath(localPath);
+            const buffer = fs.readFileSync(localPath);
+            const fileName = path.basename(localPath);
+            if (isPdf) {
+                messagePayload = { document: buffer, mimetype: 'application/pdf', fileName, caption };
+            } else {
+                messagePayload = { image: buffer, caption };
+            }
         } else if (fileUrl.startsWith('http://') || fileUrl.startsWith('https://')) {
-            media = await MessageMedia.fromUrl(fileUrl);
+            if (isPdf) {
+                messagePayload = { document: { url: fileUrl }, mimetype: 'application/pdf', caption };
+            } else {
+                messagePayload = { image: { url: fileUrl }, caption };
+            }
         } else {
             let cleanedPath = fileUrl;
             if (!cleanedPath.includes(':') && !cleanedPath.startsWith('/') && !cleanedPath.startsWith('\\')) {
                  cleanedPath = path.join(__dirname, '../../', fileUrl);
             }
             if (fs.existsSync(cleanedPath)) {
-                media = MessageMedia.fromFilePath(cleanedPath);
+                const buffer = fs.readFileSync(cleanedPath);
+                const fileName = path.basename(cleanedPath);
+                if (isPdf) {
+                    messagePayload = { document: buffer, mimetype: 'application/pdf', fileName, caption };
+                } else {
+                    messagePayload = { image: buffer, caption };
+                }
             } else {
                 throw new Error(`Local file not found at: ${cleanedPath} (Tried localPath: ${localPath})`);
             }
         }
 
-        const result = await client.sendMessage(targetId, media, { 
-            caption: caption,
-            sendMediaAsDocument: isPdf 
-        });
+        const sendResult = await sock.sendMessage(targetJid, messagePayload);
         logToFile(`Media sent successfully from session ${id}`);
-        return result;
+        return sendResult;
     } catch (e) {
         console.error(`[WhatsApp] Failed to send media from session ${id}:`, e.message);
-        logToFile(`Error sending media from session ${id} to ${cleanPhone}`, { error: e.message });
-        
-        if (e.message && e.message.includes('detached Frame')) {
-            console.error(`[WhatsApp] Detached frame in session ${id}. Destroying client...`);
-            clientStatus.set(id, 'disconnected');
-            client.destroy().then(() => initialize(id)).catch(() => initialize(id));
-        }
-        
+        logToFile(`Error sending media from session ${id} to ${targetJid}`, { error: e.message });
         throw e;
     }
 };
@@ -542,26 +475,6 @@ const getAllWhatsappHealth = () => {
         });
     }
 
-    // Check Chrome session lock status
-    let lockFilesCount = 0;
-    try {
-        if (fs.existsSync(whatsappAuthPath)) {
-            const checkLocks = (dir) => {
-                const entries = fs.readdirSync(dir, { withFileTypes: true });
-                entries.forEach(entry => {
-                    const full = path.join(dir, entry.name);
-                    if (entry.isDirectory()) {
-                        checkLocks(full);
-                    } else if (LOCK_FILES.includes(entry.name)) {
-                        lockFilesCount++;
-                    }
-                });
-            };
-            checkLocks(whatsappAuthPath);
-        }
-    } catch (_) {}
-
-    // Fetch recent debug log snippets
     let lastLogSnippet = 'No recent error logs.';
     try {
         const logPath = path.join(__dirname, '../../whatsapp_debug.txt');
@@ -577,8 +490,8 @@ const getAllWhatsappHealth = () => {
         totalConfiguredSessions: sessions.length,
         authDirectory: whatsappAuthPath,
         authDirectoryExists: fs.existsSync(whatsappAuthPath),
-        activeLockFiles: lockFilesCount,
-        chromeLockClean: lockFilesCount === 0,
+        activeLockFiles: 0, // Not applicable for Baileys
+        chromeLockClean: true, // Not applicable for Baileys
         recentLogSnippet: lastLogSnippet,
         sessions
     };

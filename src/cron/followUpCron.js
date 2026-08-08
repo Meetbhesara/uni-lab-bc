@@ -25,6 +25,65 @@ const fmtDate = (d) => {
     return new Date(d).toLocaleDateString('en-GB');
 };
 
+const sendBulkOverdueReminders = async () => {
+    try {
+        console.log('[FollowUpCron] 🕘 Running daily bulk overdue check...');
+        const todayStart = new Date();
+        todayStart.setHours(0, 0, 0, 0);
+
+        // Find overdue enquiries (strictly before today)
+        const Enquiry = require('../models/Enquiry');
+        const overdueEnquiriesCount = await Enquiry.countDocuments({
+            status: { $nin: ['Done', 'Reject', 'done', 'reject'] },
+            nextFollowUp: { $lt: todayStart }
+        });
+
+        if (overdueEnquiriesCount >= 10) {
+            console.log(`[FollowUpCron] 📋 Found ${overdueEnquiriesCount} overdue enquiries. Sending bulk reminder.`);
+            
+            const allUsers = await User.find({});
+            const targetUsers = allUsers.filter(u => {
+                if (u.isSuperAdmin) return true;
+                const perms = u.permissions || {};
+                return (
+                    perms?.enquiries?.read === true ||
+                    perms?.incomingEnquiries?.read === true ||
+                    perms?.outboundQuotations?.read === true ||
+                    perms?.processedHistory?.read === true
+                );
+            }).filter(u => u.phone);
+
+            if (targetUsers.length === 0) {
+                console.log('[FollowUpCron] ⚠️ No users found for bulk overdue reminder.');
+                return;
+            }
+
+            for (const user of targetUsers) {
+                const userName = user.name || user.contactPersonName || 'Team';
+                const message = `*Action Required: Pending Enquiries Reminder* ⚠️\n\n` +
+                                `Hello *${userName}*,\n\n` +
+                                `You currently have *${overdueEnquiriesCount}* enquiries that are overdue for a follow-up.\n\n` +
+                                `Please log in and update their statuses by doing one of the following:\n` +
+                                `📅 Adding a *Next Follow-up Date*\n` +
+                                `✅ Marking them as *Successful*\n` +
+                                `❌ Marking them as *Rejected*\n\n` +
+                                `View your pending enquiries in the dashboard.\n\n` +
+                                `Thank you!`;
+                try {
+                    await sendWhatsapp(user.phone, message);
+                    console.log(`[FollowUpCron] ✅ Bulk reminder sent to ${userName} (${user.phone})`);
+                } catch (err) {
+                    console.error(`[FollowUpCron] ❌ Failed to send bulk reminder to ${userName} (${user.phone}): ${err.message}`);
+                }
+            }
+        } else {
+            console.log(`[FollowUpCron] ✅ Overdue enquiries count (${overdueEnquiriesCount}) is less than 10. No bulk reminder sent.`);
+        }
+    } catch (err) {
+        console.error('[FollowUpCron] ❌ Error in bulk overdue cron:', err.message);
+    }
+};
+
 const sendFollowUpReminders = async () => {
     try {
         console.log('[FollowUpCron] 🕘 Running daily follow-up check...');
@@ -201,19 +260,28 @@ const sendFollowUpReminders = async () => {
 };
 
 /**
- * Starts the daily 12:02 PM follow-up cron job.
+ * Starts the daily 11:02 PM follow-up cron job.
  * Call this once during server startup.
  */
 const startFollowUpCron = () => {
-    // Runs every day at 12:02 PM IST (cron: minute=2, hour=12)
+    // Runs every day at 11:02 PM IST (cron: minute=2, hour=12)
     cron.schedule('2 11 * * *', () => {
-        console.log('[FollowUpCron] ⏰ Cron triggered at 12:02 PM');
+        console.log('[FollowUpCron] ⏰ Cron triggered at 11:02 PM');
         sendFollowUpReminders();
     }, {
         timezone: 'Asia/Kolkata'
     });
 
+    // Bulk Overdue Reminders every day at 12:00 PM IST (cron: minute=0, hour=12)
+    cron.schedule('0 12 * * *', () => {
+        console.log('[FollowUpCron] ⏰ Bulk Overdue Cron triggered at 12:00 PM');
+        sendBulkOverdueReminders();
+    }, {
+        timezone: 'Asia/Kolkata'
+    });
+
     console.log('[FollowUpCron] 🟢 Follow-up cron scheduled — daily at 12:02 PM IST');
+    console.log('[FollowUpCron] 🟢 Bulk Overdue cron scheduled — daily at 12:00 PM IST');
 };
 
 module.exports = { startFollowUpCron, sendFollowUpReminders };
