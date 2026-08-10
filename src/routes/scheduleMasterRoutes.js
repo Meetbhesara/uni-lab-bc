@@ -11,6 +11,7 @@ const {
     completeSchedule,
     rejectSchedule,
     getSitesByClient,
+    getLastAssignment,
     updateInvoiceStatus,
     generateSchedulerInvoice,
     pauseMonth,
@@ -95,6 +96,9 @@ const upload = multer({
 
 // GET  /api/schedule-master?date=2024-01-15  (date-wise)
 router.get('/', getSchedules);
+
+// GET /api/schedule-master/last-assignment/:operativeId
+router.get('/last-assignment/:operativeId', auth, getLastAssignment);
 router.get('/sites-by-client/:clientId', getSitesByClient);
 router.post('/', createSchedule);
 router.put('/:id', auth, updateSchedule);

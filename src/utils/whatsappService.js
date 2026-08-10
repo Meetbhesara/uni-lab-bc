@@ -152,7 +152,7 @@ const initialize = async (sessionId = 'system_default', attempt = 1, maxAttempts
 
     const sock = makeWASocket({
         version,
-        logger: pino({ level: 'info' }), 
+        logger: pino({ level: 'silent' }), 
         printQRInTerminal: false,
         auth: state,
         markOnlineOnConnect: false

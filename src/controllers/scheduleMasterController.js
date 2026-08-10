@@ -480,6 +480,18 @@ const getSchedules = async (req, res) => {
         for (const schedule of overdueSchedules) {
             try {
                 if (!schedule.scheduleDate) continue;
+                
+                // If the schedule was intentionally backdated (scheduled for a date before its creation date), do not roll it over.
+                if (schedule.createdAt) {
+                    const createdStartOfDay = new Date(schedule.createdAt);
+                    createdStartOfDay.setHours(0, 0, 0, 0);
+                    const scheduleStartOfDay = new Date(schedule.scheduleDate);
+                    scheduleStartOfDay.setHours(0, 0, 0, 0);
+                    if (scheduleStartOfDay < createdStartOfDay) {
+                        continue;
+                    }
+                }
+
                 const nextDay = new Date(schedule.scheduleDate);
                 nextDay.setDate(nextDay.getDate() + 1);
 
@@ -1439,11 +1451,25 @@ const deleteSchedule = async (req, res) => {
 
 
 
+const getLastAssignment = async (req, res) => {
+    try {
+        const { operativeId } = req.params;
+        const lastSchedule = await ScheduleMaster.findOne({ operative: operativeId })
+            .sort({ scheduleDate: -1, createdAt: -1 })
+            .select('helpers vehicle instruments');
+        
+        res.json({ success: true, data: lastSchedule });
+    } catch (error) {
+        res.status(500).json({ success: false, message: error.message });
+    }
+};
+
 module.exports = {
     createSchedule,
     updateSchedule,
     getSchedules,
     getSitesByClient,
+    getLastAssignment,
     completeSchedule,
     rejectSchedule,
     updateInvoiceStatus,

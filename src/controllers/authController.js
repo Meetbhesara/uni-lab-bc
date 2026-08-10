@@ -135,7 +135,7 @@ const getMe = async (req, res) => {
             }
         }
 
-        res.json({ id: user.id, name: user.name, email: user.email, phone: user.phone, isAdmin: user.isAdmin, isSuperAdmin: user.isSuperAdmin, permissions: user.permissions, companyName: user.companyName, contactPersonName: user.contactPersonName, gstNumber: user.gstNumber });
+        res.json({ id: user._id, _id: user._id, name: user.name, email: user.email, phone: user.phone, isAdmin: user.isAdmin, isSuperAdmin: user.isSuperAdmin, permissions: user.permissions, companyName: user.companyName, contactPersonName: user.contactPersonName, gstNumber: user.gstNumber });
     } catch (err) {
         console.error(err.message);
         res.status(500).send('Server Error');
