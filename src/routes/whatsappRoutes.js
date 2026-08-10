@@ -5,20 +5,26 @@ const auth = require('../middlewares/auth');
 
 // WhatsApp Session Management Routes
 router.get('/status', auth, (req, res) => {
-    const sessionId = req.query.sessionId || `admin_${req.user.id}`;
+    let sessionId = req.query.sessionId;
+    if (sessionId && sessionId !== 'system_default' && !sessionId.startsWith('admin_')) sessionId = `admin_${sessionId}`;
+    if (!sessionId) sessionId = `admin_${req.user.id}`;
     const status = getStatus(sessionId);
     res.json(status);
 });
 
 router.post('/connect', auth, (req, res) => {
-    const sessionId = req.body.sessionId || `admin_${req.user.id}`;
+    let sessionId = req.body.sessionId;
+    if (sessionId && sessionId !== 'system_default' && !sessionId.startsWith('admin_')) sessionId = `admin_${sessionId}`;
+    if (!sessionId) sessionId = `admin_${req.user.id}`;
     const phoneNumber = req.body.phoneNumber || null;
     initialize(sessionId, 1, 3, phoneNumber);
     res.json({ success: true, msg: `Initializing session ${sessionId}` });
 });
 
 router.post('/disconnect', auth, async (req, res) => {
-    const sessionId = req.body.sessionId || `admin_${req.user.id}`;
+    let sessionId = req.body.sessionId;
+    if (sessionId && sessionId !== 'system_default' && !sessionId.startsWith('admin_')) sessionId = `admin_${sessionId}`;
+    if (!sessionId) sessionId = `admin_${req.user.id}`;
     await disconnect(sessionId);
     res.json({ success: true, msg: `Disconnected session ${sessionId}` });
 });

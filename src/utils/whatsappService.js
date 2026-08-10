@@ -460,7 +460,7 @@ const getAllWhatsappHealth = () => {
     const sessions = [];
     for (const [sessionId, status] of clientStatus.entries()) {
         sessions.push({
-            sessionId,
+            sessionId: sessionId.startsWith('admin_') ? sessionId.replace('admin_', '') : sessionId,
             status,
             isReady: status === 'ready',
             hasQr: !!clientQrs.get(sessionId)
