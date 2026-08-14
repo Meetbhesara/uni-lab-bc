@@ -55,7 +55,7 @@ const verifyEmployeeOtp = async (req, res) => {
         if (!employee) return res.status(404).json({ success: false, msg: 'Employee record not found' });
 
         const payload = { employeeId: employee._id, type: 'employee' };
-        const token = jwt.sign(payload, process.env.JWT_SECRET, { expiresIn: '12h' });
+        const token = jwt.sign(payload, process.env.JWT_SECRET, { expiresIn: process.env.JWT_EXPIRE || '365d' });
 
         res.json({
             success: true,

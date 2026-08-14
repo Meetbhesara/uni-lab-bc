@@ -14,6 +14,14 @@ const ProductSchema = new mongoose.Schema({
         name: { type: String },
         price: { type: Number }
     }],
+    hasCalibration: { type: Boolean, default: false },
+    calibrationSellingPriceStart: { type: Number },
+    calibrationSellingPriceEnd: { type: Number },
+    calibrationDealerPrice: { type: Number },
+    calibrationVendors: [{
+        name: { type: String },
+        price: { type: Number }
+    }],
     alternativeNames: [String],
     images: [String], // Array of URLs
     pdf: { type: String }, // PDF URL

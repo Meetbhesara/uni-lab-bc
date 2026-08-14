@@ -341,17 +341,32 @@ const sendWhatsapp = async (phone, message, adminId = null, isOtp = false) => {
 
     const targetJid = formatPhoneForBaileys(phone);
     try {
-        const [result] = await sock.onWhatsApp(targetJid);
-        if (!result || !result.exists) {
-            console.log(`[WhatsApp] Phone ${phone} is not on WhatsApp.`);
-        }
+        const sendPromise = (async () => {
+            const [result] = await sock.onWhatsApp(targetJid);
+            if (!result || !result.exists) {
+                console.log(`[WhatsApp] Phone ${phone} is not on WhatsApp.`);
+            }
+            return await sock.sendMessage(targetJid, { text: message });
+        })();
+
+        // 15-second timeout to prevent ghost connection hangs
+        const timeoutPromise = new Promise((_, reject) =>
+            setTimeout(() => reject(new Error("WhatsApp message send timed out (Ghost Connection)")), 15000)
+        );
+
+        const sendResult = await Promise.race([sendPromise, timeoutPromise]);
         
-        const sendResult = await sock.sendMessage(targetJid, { text: message });
         logToFile(`Message sent successfully from session ${id} to ${targetJid}`);
         return sendResult;
     } catch (e) {
         console.error(`[WhatsApp] Failed to send message from session ${id}:`, e);
         logToFile(`Error sending from session ${id} to ${targetJid}`, { error: e.message });
+        
+        if (e.message && e.message.includes('Ghost Connection')) {
+            // Force disconnect to trigger a fresh reconnect on next attempt
+            try { disconnect(id); } catch (err) {}
+        }
+        
         throw new Error(e.message || "Failed to send WhatsApp message.");
     }
 };
@@ -439,13 +454,26 @@ const sendWhatsappMedia = async (phone, fileUrl, caption, adminId = null) => {
             }
         }
 
-        const sendResult = await sock.sendMessage(targetJid, messagePayload);
-        logToFile(`Media sent successfully from session ${id}`);
+        const sendPromise = sock.sendMessage(targetJid, messagePayload);
+
+        // 20-second timeout for media to prevent ghost connection hangs
+        const timeoutPromise = new Promise((_, reject) =>
+            setTimeout(() => reject(new Error("WhatsApp media send timed out (Ghost Connection)")), 20000)
+        );
+
+        const sendResult = await Promise.race([sendPromise, timeoutPromise]);
+        
+        logToFile(`Media sent successfully from session ${id} to ${targetJid}`);
         return sendResult;
     } catch (e) {
-        console.error(`[WhatsApp] Failed to send media from session ${id}:`, e.message);
+        console.error(`[WhatsApp] Failed to send media from session ${id}:`, e);
         logToFile(`Error sending media from session ${id} to ${targetJid}`, { error: e.message });
-        throw e;
+        
+        if (e.message && e.message.includes('Ghost Connection')) {
+            try { disconnect(id); } catch (err) {}
+        }
+        
+        throw new Error(e.message || "Failed to send WhatsApp media message.");
     }
 };
 

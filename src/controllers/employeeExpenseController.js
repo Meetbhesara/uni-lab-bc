@@ -930,7 +930,7 @@ exports.getAttendanceByDate = async (req, res) => {
         const records = await EmployeeExpense.find({
             date: { $gte: startOfDay, $lte: endOfDay },
             attendance: { $exists: true }
-        }).select('employeeId attendance attendanceRemark');
+        }).select('employeeId attendance attendanceRemark workLocation expenses');
 
         const data = records.map(r => {
             const rawRemark = r.attendanceRemark || '';
@@ -938,7 +938,9 @@ exports.getAttendanceByDate = async (req, res) => {
             return {
                 employeeId: String(r.employeeId),
                 attendance: r.attendance,
-                attendanceRemark: cleanRemark
+                attendanceRemark: cleanRemark,
+                workLocation: r.workLocation || '',
+                expenses: r.expenses || { breakfast: 0, lunch: 0, dinner: 0, petrol: 0 }
             };
         });
 
@@ -1115,10 +1117,15 @@ exports.getDailySummary = async (req, res) => {
                 empMap[empId].matchedUserId = empIdToMatchedUserMap[empId] || null;
             }
             // Get site names
-            const siteNames = (exp.clientSites || [])
+            let siteNames = (exp.clientSites || [])
                 .map(cs => cs.siteId?.siteName || cs.siteId || '')
                 .filter(Boolean)
                 .join(', ');
+            
+            // If no client sites (like in Unscheduled Attendance), fallback to workLocation (Home/Godown)
+            if (!siteNames && exp.workLocation) {
+                siteNames = exp.workLocation;
+            }
 
             // Sum credit/debit from ledger for this expense's referenceId
             const expLedgers = ledgers.filter(l => String(l.referenceId) === String(exp._id));
@@ -1346,10 +1353,13 @@ exports.getDailySummary = async (req, res) => {
                             existing.siteNames = scheduledPresenceMap[`${emp.empId}|${dateKey}`].siteName || 'Scheduled Duty';
                         }
                     } else {
-                        // Admin Report says Absent (no admin login) and no schedule
-                        existing.attendance = 'Absent';
-                        if (!existing.attendanceRemark) {
-                            existing.attendanceRemark = 'No Admin Login';
+                        // Admin Report says Absent (no admin login) and no schedule.
+                        // ONLY force Absent if there is no manual attendance recorded (like Unscheduled Present).
+                        if (existing.attendance !== 'Present' && existing.attendance !== 'Half Day') {
+                            existing.attendance = 'Absent';
+                            if (!existing.attendanceRemark) {
+                                existing.attendanceRemark = 'No Admin Login';
+                            }
                         }
                     }
                 } else {
@@ -1391,7 +1401,7 @@ exports.bulkSaveAttendance = async (req, res) => {
         const saved = [];
 
         for (const entry of entries) {
-            const { employeeId, date, attendance, attendanceRemark } = entry;
+            const { employeeId, date, attendance, attendanceRemark, workLocation, expenses: entryExpenses } = entry;
             if (!employeeId || !date || !attendance) continue;
 
             // Build strict 24-hour local range for the entry date
@@ -1399,30 +1409,97 @@ exports.bulkSaveAttendance = async (req, res) => {
             const startOfDay = new Date(year, month - 1, day, 0, 0, 0, 0);
             const endOfDay   = new Date(year, month - 1, day, 23, 59, 59, 999);
 
-            // Upsert: update attendance if record exists, else create a minimal one
-            const updated = await EmployeeExpense.findOneAndUpdate(
-                {
-                    employeeId,
-                    date: { $gte: startOfDay, $lte: endOfDay }
-                },
-                {
-                    $set: {
-                        attendance,
-                        attendanceRemark: attendanceRemark || ''
-                    },
-                    $setOnInsert: {
-                        employeeId,
-                        date: startOfDay,
-                        expenses: { breakfast: 0, lunch: 0, dinner: 0, petrol: 0 },
-                        otherExpensesList: [],
-                        totalExpense: 0,
-                        clientSites: []
-                    }
-                },
-                { upsert: true, new: true }
+            // Calculate total expenses for this new submission
+            let newTotalExpense = 0;
+            const finalExpenses = { breakfast: 0, lunch: 0, dinner: 0, petrol: 0 };
+            if (entryExpenses) {
+                finalExpenses.breakfast = Number(entryExpenses.breakfast) || 0;
+                finalExpenses.lunch     = Number(entryExpenses.lunch)     || 0;
+                finalExpenses.dinner    = Number(entryExpenses.dinner)    || 0;
+                finalExpenses.petrol    = Number(entryExpenses.petrol)    || 0;
+                if (entryExpenses.fuelType) finalExpenses.fuelType = entryExpenses.fuelType;
+                
+                newTotalExpense += (finalExpenses.breakfast + finalExpenses.lunch + finalExpenses.dinner + finalExpenses.petrol);
+            }
+            
+            let finalOtherExpensesList = [];
+            if (Array.isArray(entry.otherExpensesList) && entry.otherExpensesList.length > 0) {
+                finalOtherExpensesList = entry.otherExpensesList.map(r => ({
+                    expenseName: r.expenseName || '',
+                    amount: Number(r.amount) || 0,
+                    files: []
+                }));
+                newTotalExpense += finalOtherExpensesList.reduce((acc, curr) => acc + curr.amount, 0);
+            }
+
+            // Find existing to calculate difference
+            const existingExpense = await EmployeeExpense.findOne({
+                employeeId,
+                date: { $gte: startOfDay, $lte: endOfDay }
+            });
+
+            const oldTotalExpense = existingExpense ? (existingExpense.totalExpense || 0) : 0;
+            // Unscheduled attendance doesn't handle givenTo/receivedFrom, so difference is just the expense change
+            const difference = newTotalExpense - oldTotalExpense;
+
+            // Update Employee Balance
+            const employee = await EmployeeMaster.findByIdAndUpdate(
+                employeeId,
+                { $inc: { totalAmount: -difference } },
+                { new: true }
             );
 
-            saved.push({ employeeId: String(updated.employeeId), attendance: updated.attendance, attendanceRemark: updated.attendanceRemark });
+            // Save/Update Expense Record
+            let updated;
+            if (existingExpense) {
+                existingExpense.attendance = attendance;
+                existingExpense.attendanceRemark = attendanceRemark || '';
+                if (workLocation) existingExpense.workLocation = workLocation;
+                
+                existingExpense.expenses = finalExpenses;
+                existingExpense.otherExpensesList = finalOtherExpensesList;
+                existingExpense.totalExpense = newTotalExpense;
+                existingExpense.remainingBalance = employee ? employee.totalAmount : 0;
+                
+                updated = await existingExpense.save();
+                
+                // Delete old ledger entries for this expense
+                await EmployeeLedger.deleteMany({ referenceId: existingExpense._id, category: 'Expense' });
+            } else {
+                updated = await new EmployeeExpense({
+                    employeeId,
+                    date: startOfDay,
+                    attendance,
+                    attendanceRemark: attendanceRemark || '',
+                    workLocation: workLocation || '',
+                    expenses: finalExpenses,
+                    otherExpensesList: finalOtherExpensesList,
+                    totalExpense: newTotalExpense,
+                    remainingBalance: employee ? employee.totalAmount : 0,
+                    clientSites: []
+                }).save();
+            }
+
+            // Re-create Ledger Entry if there's an expense
+            if (newTotalExpense > 0) {
+                await new EmployeeLedger({
+                    employee: employeeId,
+                    date: startOfDay,
+                    amount: newTotalExpense,
+                    type: 'Debit',
+                    category: 'Expense',
+                    description: `Daily Expense on ${startOfDay.toLocaleDateString()}${existingExpense ? ' (Updated)' : ''}`,
+                    referenceId: updated._id
+                }).save();
+            }
+
+            saved.push({
+                employeeId: String(updated.employeeId),
+                attendance: updated.attendance,
+                attendanceRemark: updated.attendanceRemark,
+                workLocation: updated.workLocation || '',
+                expenses: updated.expenses
+            });
         }
 
         broadcast('expense-changed', { action: 'attendance-bulk' });

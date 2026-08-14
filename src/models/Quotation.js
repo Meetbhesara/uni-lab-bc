@@ -10,7 +10,8 @@ const QuotationItemSchema = new mongoose.Schema({
     selectedSizes: [{
         size: { type: String },
         quantity: { type: Number, default: 1 }
-    }]
+    }],
+    isCalibration: { type: Boolean, default: false }
 }, { _id: false });
 
 const FollowUpSchema = new mongoose.Schema({

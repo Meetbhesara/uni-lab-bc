@@ -7,6 +7,7 @@ const { sendWhatsapp } = require('../utils/whatsappService');
 const speakeasy = require('speakeasy');
 const QRCode = require('qrcode');
 const crypto = require('crypto');
+const { addToGoogleContacts } = require('../utils/googleContacts');
 
 function getDistanceInMeters(lat1, lon1, lat2, lon2) {
     const R = 6371e3; // Earth's radius in meters
@@ -308,6 +309,14 @@ const phoneRegister = async (req, res) => {
 
         await user.save();
 
+        // Silently sync new user to central Google Contacts (non-blocking)
+        addToGoogleContacts({
+            name: user.name,
+            phone: user.phone,
+            email: user.email,
+            company: user.companyName || ''
+        }).catch(() => {}); // fire and forget — never block registration
+
         const payload = {
             id: user.id,
             isAdmin: user.isAdmin
@@ -481,7 +490,7 @@ const verifyAdminOtp = async (req, res) => {
         await user.save();
 
         const payload = { id: user.id, isAdmin: user.isAdmin, isSuperAdmin: user.isSuperAdmin };
-        jwt.sign(payload, process.env.JWT_SECRET, { expiresIn: process.env.JWT_EXPIRE || '1h' }, async (err, token) => {
+        jwt.sign(payload, process.env.JWT_SECRET, { expiresIn: process.env.JWT_EXPIRE || '365d' }, async (err, token) => {
             if (err) throw err;
             await recordAdminLogin(user, req);
             res.json({ token, user: { id: user.id, name: user.name, email: user.email, phone: user.phone, isAdmin: user.isAdmin, isSuperAdmin: user.isSuperAdmin, permissions: user.permissions } });
@@ -584,7 +593,7 @@ const loginWith2FA = async (req, res) => {
             }
 
             const payload = { id: user.id, isAdmin: user.isAdmin };
-            jwt.sign(payload, process.env.JWT_SECRET, { expiresIn: '1h' }, async (err, token) => {
+            jwt.sign(payload, process.env.JWT_SECRET, { expiresIn: process.env.JWT_EXPIRE || '365d' }, async (err, token) => {
                 if (err) throw err;
                 await recordAdminLogin(user, req);
                 res.json({ token, user: { id: user.id, name: user.name, email: user.email, phone: user.phone, isAdmin: user.isAdmin, isSuperAdmin: user.isSuperAdmin, permissions: user.permissions } });

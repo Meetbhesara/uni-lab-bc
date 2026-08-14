@@ -853,6 +853,8 @@ const getAttendanceDetail = async (req, res) => {
                 remark = exp.attendanceRemark || exp.notes || 'Expense logged';
                 if (exp.clientSites && exp.clientSites.length > 0) {
                     sites = exp.clientSites.map(cs => cs.siteId?.siteName || cs.ledger || 'Unknown Site');
+                } else if (exp.workLocation) {
+                    sites = [exp.workLocation];
                 } else {
                     sites = ['—'];
                 }

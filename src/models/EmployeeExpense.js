@@ -78,6 +78,11 @@ const EmployeeExpenseSchema = new mongoose.Schema({
     attendanceRemark: {
         type: String
     },
+    workLocation: {
+        type: String,
+        enum: ['Home', 'Godown', 'Office', ''],
+        default: ''
+    },
     creditDebit: {
         givenTo: [{
             employeeRef: { type: mongoose.Schema.Types.ObjectId, ref: 'EmployeeMaster' },

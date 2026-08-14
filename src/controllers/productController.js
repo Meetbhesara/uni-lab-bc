@@ -262,7 +262,10 @@ const createProduct = async (req, res) => {
     console.log('Payload body:', req.body);
     console.log('Uploaded files:', req.files);
     try {
-        const { name, description, category, details, sellingPriceStart, sellingPriceEnd, purchasePrice, dealerPrice, vendor, vendors, alternativeNames, stock, videoLinks } = req.body;
+        const { name, description, category, details, sellingPriceStart, sellingPriceEnd, 
+            purchasePrice, dealerPrice, vendor, vendors, alternativeNames, stock, videoLinks,
+            hasCalibration, calibrationSellingPriceStart, calibrationSellingPriceEnd, 
+            calibrationDealerPrice, calibrationVendors } = req.body;
 
         if (!name || !description || !category) {
             console.warn('⚠️ Validation failed: Missing required fields (name, description, category)');
@@ -343,6 +346,19 @@ const createProduct = async (req, res) => {
             }
         }
 
+        let parsedCalibrationVendors = [];
+        if (calibrationVendors) {
+            if (typeof calibrationVendors === 'string') {
+                try {
+                    parsedCalibrationVendors = JSON.parse(calibrationVendors);
+                } catch (e) {
+                    console.error('Error parsing calibrationVendors:', e);
+                }
+            } else if (Array.isArray(calibrationVendors)) {
+                parsedCalibrationVendors = calibrationVendors;
+            }
+        }
+
         let parsedStock = 0;
         const rawStock = Array.isArray(stock) ? stock[0] : stock;
         if (rawStock !== undefined && rawStock !== null && rawStock !== '') {
@@ -372,6 +388,11 @@ const createProduct = async (req, res) => {
             dealerPrice,
             vendor,
             vendors: parsedVendors,
+            hasCalibration: hasCalibration === 'true' || hasCalibration === true,
+            calibrationSellingPriceStart,
+            calibrationSellingPriceEnd,
+            calibrationDealerPrice,
+            calibrationVendors: parsedCalibrationVendors,
             alternativeNames: parsedAlternativeNames,
             images,
             pdf,
@@ -403,7 +424,8 @@ const updateProduct = async (req, res) => {
             return res.status(404).json({ msg: 'Product not found' });
         }
 
-        const { name, description, category, details, alternativeNames, vendors, videoLinks } = req.body;
+        const { name, description, category, details, alternativeNames, vendors, videoLinks, calibrationVendors } = req.body;
+
 
         // Helper to clean numbers
         const cleanNumber = (val) => {
@@ -418,6 +440,10 @@ const updateProduct = async (req, res) => {
         const vendor = req.body.vendor;
         const stock = cleanNumber(req.body.stock);
 
+        const calibrationSellingPriceStart = cleanNumber(req.body.calibrationSellingPriceStart);
+        const calibrationSellingPriceEnd = cleanNumber(req.body.calibrationSellingPriceEnd);
+        const calibrationDealerPrice = cleanNumber(req.body.calibrationDealerPrice);
+
         if (name) product.name = name;
         if (description) product.description = description;
         if (category) product.category = category;
@@ -426,6 +452,13 @@ const updateProduct = async (req, res) => {
         if (purchasePrice !== undefined) product.purchasePrice = purchasePrice;
         if (dealerPrice !== undefined) product.dealerPrice = dealerPrice;
         if (vendor !== undefined) product.vendor = vendor;
+
+        if (req.body.hasCalibration !== undefined) {
+            product.hasCalibration = req.body.hasCalibration === 'true' || req.body.hasCalibration === true;
+        }
+        if (calibrationSellingPriceStart !== undefined) product.calibrationSellingPriceStart = calibrationSellingPriceStart;
+        if (calibrationSellingPriceEnd !== undefined) product.calibrationSellingPriceEnd = calibrationSellingPriceEnd;
+        if (calibrationDealerPrice !== undefined) product.calibrationDealerPrice = calibrationDealerPrice;
         if (stock !== undefined) {
             const parsedStock = Number(stock);
             if (isNaN(parsedStock) || parsedStock < 0) {
@@ -444,6 +477,18 @@ const updateProduct = async (req, res) => {
                 }
             }
             product.vendors = parsedVendors;
+        }
+
+        if (calibrationVendors !== undefined) {
+            let parsedCalibrationVendors = calibrationVendors;
+            if (typeof calibrationVendors === 'string') {
+                try {
+                    parsedCalibrationVendors = JSON.parse(calibrationVendors);
+                } catch (e) {
+                    parsedCalibrationVendors = [];
+                }
+            }
+            product.calibrationVendors = parsedCalibrationVendors;
         }
 
         if (alternativeNames !== undefined) {
