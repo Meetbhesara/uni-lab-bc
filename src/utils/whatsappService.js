@@ -155,7 +155,10 @@ const initialize = async (sessionId = 'system_default', attempt = 1, maxAttempts
         logger: pino({ level: 'silent' }), 
         printQRInTerminal: false,
         auth: state,
-        markOnlineOnConnect: false
+        markOnlineOnConnect: false,
+        keepAliveIntervalMs: 30000,
+        defaultQueryTimeoutMs: 30000,
+        connectTimeoutMs: 60000
     });
 
     clients.set(sessionId, sock);
@@ -327,7 +330,7 @@ const formatPhoneForBaileys = (phone) => {
     return `${cleanPhone}@s.whatsapp.net`;
 };
 
-const sendWhatsapp = async (phone, message, adminId = null, isOtp = false) => {
+const sendWhatsapp = async (phone, message, adminId = null, isOtp = false, retryCount = 0) => {
     const { sock, id } = resolveClient(adminId, isOtp);
     const status = clientStatus.get(id);
 
@@ -342,9 +345,13 @@ const sendWhatsapp = async (phone, message, adminId = null, isOtp = false) => {
     const targetJid = formatPhoneForBaileys(phone);
     try {
         const sendPromise = (async () => {
-            const [result] = await sock.onWhatsApp(targetJid);
-            if (!result || !result.exists) {
-                console.log(`[WhatsApp] Phone ${phone} is not on WhatsApp.`);
+            try {
+                const [result] = await sock.onWhatsApp(targetJid);
+                if (result && !result.exists) {
+                    console.log(`[WhatsApp] Phone ${phone} is not on WhatsApp.`);
+                }
+            } catch (_) {
+                // Ignore presence check errors and proceed to send
             }
             return await sock.sendMessage(targetJid, { text: message });
         })();
@@ -362,16 +369,30 @@ const sendWhatsapp = async (phone, message, adminId = null, isOtp = false) => {
         console.error(`[WhatsApp] Failed to send message from session ${id}:`, e);
         logToFile(`Error sending from session ${id} to ${targetJid}`, { error: e.message });
         
-        if (e.message && e.message.includes('Ghost Connection')) {
-            // Force disconnect to trigger a fresh reconnect on next attempt
-            try { disconnect(id); } catch (err) {}
+        const isConnectionError = e.message && (
+            e.message.includes('Connection Closed') || 
+            e.message.includes('Ghost Connection') ||
+            e.output?.statusCode === 428
+        );
+
+        if (isConnectionError) {
+            // Mark as disconnected & re-initialize socket
+            clientStatus.set(id, 'disconnected');
+            initialize(id);
+
+            // Auto-retry once after waiting 3 seconds for reconnection
+            if (retryCount < 1) {
+                console.log(`[WhatsApp] Connection dropped. Waiting 3s to auto-retry sending to ${phone}...`);
+                await new Promise((r) => setTimeout(r, 3000));
+                return sendWhatsapp(phone, message, adminId, isOtp, retryCount + 1);
+            }
         }
         
         throw new Error(e.message || "Failed to send WhatsApp message.");
     }
 };
 
-const sendWhatsappMedia = async (phone, fileUrl, caption, adminId = null) => {
+const sendWhatsappMedia = async (phone, fileUrl, caption, adminId = null, retryCount = 0) => {
     const { sock, id } = resolveClient(adminId, false);
     const status = clientStatus.get(id);
 
@@ -469,8 +490,21 @@ const sendWhatsappMedia = async (phone, fileUrl, caption, adminId = null) => {
         console.error(`[WhatsApp] Failed to send media from session ${id}:`, e);
         logToFile(`Error sending media from session ${id} to ${targetJid}`, { error: e.message });
         
-        if (e.message && e.message.includes('Ghost Connection')) {
-            try { disconnect(id); } catch (err) {}
+        const isConnectionError = e.message && (
+            e.message.includes('Connection Closed') || 
+            e.message.includes('Ghost Connection') ||
+            e.output?.statusCode === 428
+        );
+
+        if (isConnectionError) {
+            clientStatus.set(id, 'disconnected');
+            initialize(id);
+
+            if (retryCount < 1) {
+                console.log(`[WhatsApp] Connection dropped. Waiting 3s to auto-retry sending media to ${phone}...`);
+                await new Promise((r) => setTimeout(r, 3000));
+                return sendWhatsappMedia(phone, fileUrl, caption, adminId, retryCount + 1);
+            }
         }
         
         throw new Error(e.message || "Failed to send WhatsApp media message.");
