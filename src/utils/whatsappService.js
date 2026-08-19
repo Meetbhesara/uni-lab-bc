@@ -219,9 +219,14 @@ const initialize = async (sessionId = 'system_default', attempt = 1, maxAttempts
                 notifyStatusChange(sessionId, 'disconnected');
                 
                 clients.delete(sessionId);
-                // Remove folder if logged out
+                // Remove folder if logged out (with safe error handling and retries for Windows file locks)
                 if (fs.existsSync(sessionFolder)) {
-                    fs.rmSync(sessionFolder, { recursive: true, force: true });
+                    try {
+                        fs.rmSync(sessionFolder, { recursive: true, force: true, maxRetries: 5, retryDelay: 200 });
+                        console.log(`[WhatsApp] Successfully removed logged-out session folder: ${sessionFolder}`);
+                    } catch (err) {
+                        console.error(`[WhatsApp] Could not immediately delete session folder ${sessionFolder}:`, err.message);
+                    }
                 }
             }
         } else if (connection === 'open') {
@@ -259,7 +264,7 @@ const disconnect = async (sessionId) => {
     const sessionFolder = path.join(whatsappAuthPath, `session-${sessionId}`);
     if (fs.existsSync(sessionFolder)) {
         try {
-            fs.rmSync(sessionFolder, { recursive: true, force: true });
+            fs.rmSync(sessionFolder, { recursive: true, force: true, maxRetries: 5, retryDelay: 200 });
             console.log(`[WhatsApp] Removed credential folder: ${sessionFolder}`);
         } catch (err) {
             console.error(`Failed to delete session folder: ${sessionFolder}`, err.message);
@@ -270,9 +275,7 @@ const disconnect = async (sessionId) => {
 const initializeAll = async () => {
     console.log('[WhatsApp] Starting all configured sessions...');
     
-    await initialize('system_default', 1, 3);
-
-    // Admin sessions are now stored via MultiFileAuthState in different folders in whatsappAuthPath just in case
+    // Cleanup any loose files in whatsappAuthPath if any exist
     try {
         if (fs.existsSync(whatsappAuthPath)) {
             const files = fs.readdirSync(whatsappAuthPath);
@@ -285,8 +288,8 @@ const initializeAll = async () => {
         }
     } catch (e) {}
 
-    // 1. Initialize system_default
-    initialize('system_default');
+    // 1. Initialize system_default session once
+    await initialize('system_default', 1, 3);
 
     // 2. Scan folder for other saved sessions
     try {

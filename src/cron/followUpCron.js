@@ -49,7 +49,7 @@ const sendBulkOverdueReminders = async () => {
                     perms?.enquiries?.read === true ||
                     perms?.incomingEnquiries?.read === true ||
                     perms?.outboundQuotations?.read === true ||
-                    perms?.processedHistory?.read === true
+                    perms?.processedHistory?.read === true || perms?.invoiceReport?.read === true || perms?.otherServices?.read === true
                 );
             }).filter(u => u.phone);
 
@@ -142,6 +142,33 @@ const sendFollowUpReminders = async () => {
             await e.save();
         }
 
+        // ─── PAYMENT REMINDER INVOICES INITIALIZATION (7-day default) ───
+        const ScheduleMaster = require('../models/ScheduleMaster');
+        const missingInvoiceFollowUps = await ScheduleMaster.find({
+            invoiceStatus: { $in: ['Proforma', 'Final'] },
+            $or: [
+                { nextFollowUp: { $exists: false } },
+                { nextFollowUp: null }
+            ],
+            closedDate: null
+        });
+
+        for (const s of missingInvoiceFollowUps) {
+            const baseDate = s.invoiceLockedAt || (s.invoiceDetails && s.invoiceDetails.generatedAt) || s.createdAt || new Date();
+            const computedFollowUp = new Date(new Date(baseDate).getTime() + (7 * 24 * 60 * 60 * 1000));
+            s.firstFollowUpDate = s.firstFollowUpDate || computedFollowUp;
+            s.nextFollowUp = computedFollowUp;
+            if (!s.followUps || s.followUps.length === 0) {
+                s.followUps = [{
+                    remark: 'Invoice generated - 7 days follow-up scheduled',
+                    nextFollowUpDate: computedFollowUp,
+                    addedBy: 'System',
+                    addedAt: new Date()
+                }];
+            }
+            await s.save();
+        }
+
         // ─── 1. BUILD DATE BOUNDARY (EXACTLY TODAY) ─────────────────────
         const todayStart = new Date();
         todayStart.setHours(0, 0, 0, 0);
@@ -163,7 +190,33 @@ const sendFollowUpReminders = async () => {
             nextFollowUp: { $gte: todayStart, $lte: todayEnd }
         });
 
-        if (dueQuotations.length === 0 && dueEnquiries.length === 0) {
+        // Find all open payment reminder invoices where nextFollowUp is EXACTLY today
+        const dueInvoiceEntries = await ScheduleMaster.find({
+            invoiceStatus: { $in: ['Proforma', 'Final'] },
+            closedDate: null,
+            nextFollowUp: { $gte: todayStart, $lte: todayEnd }
+        }).populate('client site');
+
+        // Group invoice entries by invoiceId
+        const invoiceGroupMap = {};
+        dueInvoiceEntries.forEach(entry => {
+            const invId = entry.finalInvoiceId || entry.proformaInvoiceId || entry.invoiceDetails?.invoiceId || String(entry._id);
+            if (!invoiceGroupMap[invId]) {
+                invoiceGroupMap[invId] = {
+                    invoiceId: invId,
+                    isTaxInvoice: Boolean(entry.finalInvoiceId || entry.finalInvoicePdf || entry.invoiceStatus === 'Final'),
+                    client: entry.client,
+                    invoiceDetails: entry.invoiceDetails,
+                    followUps: entry.followUps || [],
+                    createdAt: entry.invoiceLockedAt || entry.createdAt,
+                    entries: []
+                };
+            }
+            invoiceGroupMap[invId].entries.push(entry);
+        });
+        const dueInvoices = Object.values(invoiceGroupMap);
+
+        if (dueQuotations.length === 0 && dueEnquiries.length === 0 && dueInvoices.length === 0) {
             console.log('[FollowUpCron] ✅ No follow-ups due today.');
             return;
         }
@@ -194,15 +247,19 @@ const sendFollowUpReminders = async () => {
 
         const allDueItems = [
             ...dueQuotations.map(q => ({ type: 'Quotation', data: q })),
-            ...dueEnquiries.map(e => ({ type: 'WhatsApp Log', data: e }))
+            ...dueEnquiries.map(e => ({ type: 'WhatsApp Log', data: e })),
+            ...dueInvoices.map(inv => ({ type: 'Payment Reminder', data: inv }))
         ];
 
         // For each due item, send WhatsApp to each target user
         for (const item of allDueItems) {
+            const isInvoice = item.type === 'Payment Reminder';
             const isQuote = item.type === 'Quotation';
             const doc = item.data;
 
-            const clientName = isQuote 
+            const clientName = isInvoice
+                ? (doc.client?.clientName || 'Valued Client')
+                : isQuote 
                 ? (doc.enquiry?.companyName || doc.enquiry?.Name || 'Unknown Client')
                 : (doc.companyName || doc.Name || 'Unknown Client');
 
@@ -218,6 +275,33 @@ const sendFollowUpReminders = async () => {
 
             for (const user of targetUsers) {
                 const userName = user.name || user.contactPersonName || 'Team';
+
+                if (isInvoice) {
+                    const invNo = doc.invoiceId || 'N/A';
+                    const invTypeLabel = doc.isTaxInvoice ? 'Tax Invoice' : 'Proforma Invoice';
+                    const totalAmt = doc.entries.reduce((acc, e) => acc + (Number(e.amount) || Number(e.paymentAmount) || 0), 0);
+                    const billDate = doc.createdAt ? new Date(doc.createdAt).toLocaleDateString('en-GB') : 'N/A';
+
+                    let message = `📋 *PAYMENT REMINDER FOLLOW-UP DUE*\n` +
+                                  `Hi *${userName}*, you have an invoice payment follow-up due today!\n\n` +
+                                  `🏢 *Client:* ${clientName}\n` +
+                                  `🧾 *Invoice No:* ${invNo} (${invTypeLabel})\n` +
+                                  `💰 *Amount Due:* ₹${Number(totalAmt).toLocaleString('en-IN')}\n` +
+                                  `📅 *Bill Date:* ${billDate}\n` +
+                                  `🔁 *Follow-ups Done:* ${followUpCount}\n` +
+                                  `💬 *Last Remark:* ${lastRemark}\n` +
+                                  `📅 *Today's Date:* ${fmtDate(new Date())}\n\n` +
+                                  `Please open the app → Invoices → Payment Reminder to log your follow-up remark.`;
+
+                    try {
+                        await sendWhatsapp(user.phone, message);
+                        console.log(`[FollowUpCron] ✅ Sent to ${userName} (${user.phone})`);
+                    } catch (err) {
+                        console.error(`[FollowUpCron] ❌ Failed to send to ${userName} (${user.phone}): ${err.message}`);
+                    }
+                    await randomDelay(5000, 8000);
+                    continue;
+                }
 
                 let message = `📋 *FOLLOW-UP REMINDER*\n` +
                               `Hi *${userName}*, you have a ${item.type} follow-up due today!\n\n` +

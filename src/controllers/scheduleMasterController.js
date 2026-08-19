@@ -600,7 +600,51 @@ const getSchedules = async (req, res) => {
         if (site) filter.site = site;
         if (req.query.scheduleType) filter.scheduleType = req.query.scheduleType;
         if (req.query.workForAppley) filter.workForAppley = new RegExp(req.query.workForAppley, 'i');
-        if (req.query.invoiceStatus) filter.invoiceStatus = req.query.invoiceStatus;
+        if (req.query.invoiceStatus) {
+            if (req.query.invoiceStatus === 'Pending') {
+                filter.proformaInvoiceId = { $in: [null, '', undefined] };
+                filter.finalInvoiceId = { $in: [null, '', undefined] };
+                filter.proformaInvoicePdf = { $in: [null, '', undefined] };
+                filter.finalInvoicePdf = { $in: [null, '', undefined] };
+                filter.closedDate = { $in: [null, '', undefined] };
+                filter.invoiceStatus = { $nin: ['Proforma', 'Final', 'Closed', 'Completed'] };
+            } else if (req.query.invoiceStatus === 'Proforma') {
+                filter.$or = [
+                    { invoiceStatus: 'Proforma' },
+                    { proformaInvoiceId: { $exists: true, $ne: null, $ne: '' } },
+                    { proformaInvoicePdf: { $exists: true, $ne: null, $ne: '' } }
+                ];
+                filter.finalInvoiceId = { $in: [null, '', undefined] };
+                filter.finalInvoicePdf = { $in: [null, '', undefined] };
+                filter.closedDate = { $in: [null, '', undefined] };
+                filter.invoiceStatus = { $nin: ['Final', 'Closed', 'Completed'] };
+            } else if (req.query.invoiceStatus === 'Final') {
+                filter.$or = [
+                    { invoiceStatus: 'Final' },
+                    { finalInvoiceId: { $exists: true, $ne: null, $ne: '' } },
+                    { finalInvoicePdf: { $exists: true, $ne: null, $ne: '' } }
+                ];
+                filter.closedDate = { $in: [null, '', undefined] };
+                filter.invoiceStatus = { $nin: ['Closed', 'Completed'] };
+            } else if (req.query.invoiceStatus === 'Closed') {
+                filter.$or = [
+                    { invoiceStatus: { $in: ['Closed', 'Completed'] } },
+                    { closedDate: { $exists: true, $ne: null, $ne: '' } }
+                ];
+            } else if (req.query.invoiceStatus === 'Reminder') {
+                filter.$or = [
+                    { invoiceStatus: { $in: ['Proforma', 'Final'] } },
+                    { proformaInvoiceId: { $exists: true, $ne: null, $ne: '' } },
+                    { finalInvoiceId: { $exists: true, $ne: null, $ne: '' } },
+                    { proformaInvoicePdf: { $exists: true, $ne: null, $ne: '' } },
+                    { finalInvoicePdf: { $exists: true, $ne: null, $ne: '' } },
+                    { "invoiceDetails.invoiceId": { $exists: true, $ne: null, $ne: '' } }
+                ];
+                filter.invoiceStatus = { $nin: ['Closed', 'Completed'] };
+            } else {
+                filter.invoiceStatus = req.query.invoiceStatus;
+            }
+        }
         
         // Add employee filtering logic (if assigned as leader OR helper)
         const { employee } = req.query;
@@ -1131,9 +1175,24 @@ const generateSchedulerInvoice = async (req, res) => {
             }
         }
 
+        // Automatic 7-day Follow-up scheduling
+        const generatedAtDate = cleanDetails.generatedAt ? new Date(cleanDetails.generatedAt) : new Date();
+        const computedFollowUp = new Date(generatedAtDate.getTime() + (7 * 24 * 60 * 60 * 1000));
+        updateFields.nextFollowUp = computedFollowUp;
+
+        const followUpEntry = {
+            remark: invoiceType === 'proforma' ? 'Proforma Invoice generated - 7 days follow-up scheduled' : 'Tax Invoice generated - 7 days follow-up scheduled',
+            nextFollowUpDate: computedFollowUp,
+            addedBy: 'System',
+            addedAt: new Date()
+        };
+
         await ScheduleMaster.updateMany(
             { _id: { $in: entryIds } },
-            { $set: updateFields }
+            { 
+                $set: updateFields,
+                $push: { followUps: followUpEntry }
+            }
         );
 
         res.json({
@@ -1464,7 +1523,65 @@ const getLastAssignment = async (req, res) => {
     }
 };
 
+
+// Add a follow-up remark and set next follow-up date for an invoice
+const addInvoiceFollowUp = async (req, res) => {
+    try {
+        const { invoiceId } = req.params;
+        const { remark, nextFollowUpDate, addedBy } = req.body;
+
+        if (!remark || !remark.trim()) {
+            return res.status(400).json({ success: false, message: 'Remark is required' });
+        }
+
+        const decodedInvoiceId = decodeURIComponent(invoiceId).trim();
+
+        const query = {
+            $or: [
+                { finalInvoiceId: decodedInvoiceId },
+                { proformaInvoiceId: decodedInvoiceId },
+                { 'invoiceDetails.invoiceId': decodedInvoiceId }
+            ]
+        };
+
+        const followUpEntry = {
+            remark: remark.trim(),
+            nextFollowUpDate: nextFollowUpDate ? new Date(nextFollowUpDate) : null,
+            addedBy: addedBy || req.user?.name || req.user?.email || 'Admin',
+            addedAt: new Date()
+        };
+
+        const updateObj = {
+            $push: { followUps: followUpEntry }
+        };
+
+        if (nextFollowUpDate) {
+            updateObj.nextFollowUp = new Date(nextFollowUpDate);
+        }
+
+        const result = await ScheduleMaster.updateMany(query, updateObj);
+
+        if (result.matchedCount === 0 && mongoose.Types.ObjectId.isValid(decodedInvoiceId)) {
+            await ScheduleMaster.findByIdAndUpdate(decodedInvoiceId, updateObj);
+        }
+
+        const updatedEntries = await ScheduleMaster.find(query);
+
+        res.json({
+            success: true,
+            message: 'Follow-up added successfully',
+            followUp: followUpEntry,
+            count: result.modifiedCount,
+            entries: updatedEntries
+        });
+    } catch (err) {
+        console.error('Error adding invoice follow-up:', err);
+        res.status(500).json({ success: false, message: err.message });
+    }
+};
+
 module.exports = {
+    addInvoiceFollowUp,
     createSchedule,
     updateSchedule,
     getSchedules,

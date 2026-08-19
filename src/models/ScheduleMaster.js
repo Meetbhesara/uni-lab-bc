@@ -143,7 +143,21 @@ const ScheduleMasterSchema = new mongoose.Schema({
         type: Number,
         default: null
     },
-    closedDate: {
+        closedDate: {
+        type: Date,
+        default: null
+    },
+    followUps: [{
+        remark: { type: String, trim: true },
+        nextFollowUpDate: { type: Date },
+        addedBy: { type: String, default: 'Admin' },
+        addedAt: { type: Date, default: Date.now }
+    }],
+    nextFollowUp: {
+        type: Date,
+        default: null
+    },
+    firstFollowUpDate: {
         type: Date,
         default: null
     },
@@ -166,9 +180,12 @@ ScheduleMasterSchema.index({ client: 1, scheduleDate: -1 });
 ScheduleMasterSchema.index({ site: 1, scheduleDate: -1 });
 // 4. Invoice queries (InvoiceReport page filters by invoiceStatus)
 ScheduleMasterSchema.index({ invoiceStatus: 1, scheduleDate: -1 });
+ScheduleMasterSchema.index({ nextFollowUp: 1 });
 // 5. Active vs deactive filtering
 ScheduleMasterSchema.index({ status: 1, scheduleDate: -1 });
 // 6. Month group schedules (MONTH type schedules)
 ScheduleMasterSchema.index({ monthGroupId: 1 });
+
+
 
 module.exports = mongoose.model('ScheduleMaster', ScheduleMasterSchema);

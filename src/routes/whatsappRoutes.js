@@ -34,46 +34,14 @@ const PDFDocument = require('pdfkit');
 const fs = require('fs');
 const path = require('path');
 
-const puppeteer = require('puppeteer');
-
-// Helper component: Ensure storage directory exists and generate full pdf on-the-fly
-const STORAGE_DIR = path.resolve(process.cwd(), 'uploads');
-if (!fs.existsSync(STORAGE_DIR)) {
-    console.log(`[STORAGE] Creating uploads directory at ${STORAGE_DIR}`);
-    fs.mkdirSync(STORAGE_DIR, { recursive: true });
-}
+const { generatePDFFromHTML } = require('../utils/pdfGenerator');
 
 const generateQuotationPDF = async (htmlContent, outputPath) => {
-    let browser;
-    try {
-        browser = await puppeteer.launch({ 
-            headless: 'new',
-            args: ['--no-sandbox', '--disable-setuid-sandbox'] 
-        });
-        const page = await browser.newPage();
-        
-        // Log page errors or console triggers for debugging
-        page.on('console', msg => console.log(`[Puppeteer Page] ${msg.text()}`));
-        page.on('requestfailed', request => console.error(`[Puppeteer Request Failed] ${request.url()} - ${request.failure()?.errorText || 'Error'}`));
-
-        await page.setContent(htmlContent, { waitUntil: 'load' });
-        
-        // Give it a delay to ensure images load
-        await new Promise(resolve => setTimeout(resolve, 2500)); 
-
-        await page.pdf({ 
-            path: outputPath, 
-            format: 'A4',
-            printBackground: true,
-            margin: { top: '20px', bottom: '20px', left: '20px', right: '20px' } 
-        });
-        
-        await browser.close();
-        return outputPath;
-    } catch (e) {
-        if (browser) await browser.close();
-        throw e;
-    }
+    return await generatePDFFromHTML(htmlContent, outputPath, {
+        format: 'A4',
+        printBackground: true,
+        margin: { top: '20px', bottom: '20px', left: '20px', right: '20px' }
+    });
 };
 
 router.post('/send-quotation', auth, async (req, res) => {
@@ -97,7 +65,7 @@ router.post('/send-quotation', auth, async (req, res) => {
                 console.log(`Quotation Found!`);
                 targetPhone = targetPhone || quotation.enquiry.phone;
                 if (!targetMessage) {
-                    targetMessage = `Hello ${quotation.enquiry.Name},\n\nHere is your quotation (Ref: ${quotation.refNo}) from Unique Lab Instrument.`;
+                    targetMessage = `Hello ${quotation.enquiry.Name},\n\nHere is your quotation (Ref: ${quotation.refNo}) from Unique Engineering.`;
                 }
                 
                 // Always generate FRESH pdf from htmlContent
@@ -237,7 +205,7 @@ router.post('/send-multiple-products', auth, async (req, res) => {
 
         // 3. Send WhatsApp Messages
         // We will send an intro message, followed by product messages
-        let introMsg = `Hello ${contactPersonName || companyName || 'there'},\n\nHere are the products you requested from Unique Lab Instrument:\n\n`;
+        let introMsg = `Hello ${contactPersonName || companyName || 'there'},\n\nHere are the products you requested from Unique Engineering:\n\n`;
         await sendWhatsapp(phone, introMsg, null);
         
         // Add a small delay so messages arrive in order
@@ -275,4 +243,76 @@ router.post('/send-multiple-products', auth, async (req, res) => {
     }
 });
 
+
+router.post('/send-invoice', auth, async (req, res) => {
+    try {
+        const { phone, pdfUrl, invoiceId, invoiceType, clientName, billDate, dueDate, totalAmount, pendingAmount, sitesCovered, message, additionalFiles } = req.body;
+        const adminId = req.user?.id;
+
+        if (!phone) {
+            return res.status(400).json({ success: false, error: 'Phone number is required.' });
+        }
+
+        if (!pdfUrl && (!additionalFiles || additionalFiles.length === 0)) {
+            return res.status(400).json({ success: false, error: 'No PDF or document file specified.' });
+        }
+
+        const isProforma = invoiceType === 'proforma' || invoiceType === 'PROFORMA';
+        const typeLabel = isProforma ? 'Proforma Invoice' : 'Tax Invoice';
+
+        // Construct a cool, rich, formatted WhatsApp payment reminder message
+        let coolReminderMsg = message;
+        if (!coolReminderMsg) {
+            coolReminderMsg = `🔔 *PAYMENT REMINDER & INVOICE DETAILS*\n\n` +
+                `Hello *${clientName || 'Valued Client'}*,\n\n` +
+                `Greetings from *Unique Engineering*! 👋\n\n` +
+                `Here are the details for your *${typeLabel}*:\n` +
+                `------------------------------------\n` +
+                `📄 *Invoice No:* ${invoiceId || 'N/A'}\n` +
+                (billDate ? `📅 *Bill Date:* ${billDate}\n` : '') +
+                (dueDate ? `⏰ *Due Date:* ${dueDate}\n` : '') +
+                (sitesCovered ? `📍 *Sites Covered:* ${sitesCovered}\n` : '') +
+                (totalAmount ? `💰 *Total Amount:* ₹${Number(totalAmount).toLocaleString('en-IN')}\n` : '') +
+                (pendingAmount ? `🔴 *Pending Balance:* ₹${Number(pendingAmount).toLocaleString('en-IN')}\n` : '') +
+                `------------------------------------\n\n` +
+                `📎 *Please find attached your Invoice PDF & Site Documents below.*\n\n` +
+                `Kindly review the documents and process the pending payment at your earliest convenience.\n\n` +
+                `If you have already made the payment, please disregard this message.\n\n` +
+                `Thank you for your business! 🙏\n` +
+                `*Unique Engineering*`;
+        }
+
+        console.log("[WhatsApp] Sending payment reminder & invoice " + (invoiceId || '') + " to " + phone + " via admin session admin_" + adminId);
+
+        // 1. Send the text message first
+        await sendWhatsapp(phone, coolReminderMsg, adminId);
+
+        const delay = ms => new Promise(resolve => setTimeout(resolve, ms));
+        await delay(1500);
+
+        // 2. Send the PDF attachment
+        if (pdfUrl) {
+            const pdfCaption = `📄 *Attached PDF:* ${typeLabel} (${invoiceId || ''})`;
+            await sendWhatsappMedia(phone, pdfUrl, pdfCaption, adminId);
+        }
+
+        // 3. Send additional selected site documents if provided
+        if (Array.isArray(additionalFiles) && additionalFiles.length > 0) {
+            for (const fileUrl of additionalFiles) {
+                if (fileUrl) {
+                    await delay(1200);
+                    const fileName = fileUrl.split('/').pop() || 'Document';
+                    await sendWhatsappMedia(phone, fileUrl, "📄 Attachment: " + fileName, adminId);
+                }
+            }
+        }
+
+        res.status(200).json({ success: true, msg: "WhatsApp payment reminder message, PDF and documents sent successfully!" });
+    } catch (e) {
+        console.error("[WhatsApp] Exception in /send-invoice handler:", e);
+        res.status(500).json({ success: false, error: e.message || 'Failed to send WhatsApp message' });
+    }
+});
+
 module.exports = router;
+

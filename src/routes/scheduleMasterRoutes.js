@@ -19,7 +19,8 @@ const {
     endMonth,
     uploadDraftingWorkFiles,
     deleteDraftingWorkFile,
-    deleteSchedule
+    deleteSchedule,
+    addInvoiceFollowUp
 } = require('../controllers/scheduleMasterController');
 
 
@@ -147,5 +148,8 @@ router.delete('/drafting-work/:id/:category/:fileId', deleteDraftingWorkFile);
 
 // DELETE /api/schedule-master/:id (Delete schedule entirely)
 router.delete('/:id', deleteSchedule);
+
+// POST /api/schedule-master/invoice/:invoiceId/follow-up (Add invoice follow-up)
+router.post('/invoice/:invoiceId/follow-up', addInvoiceFollowUp);
 
 module.exports = router;
