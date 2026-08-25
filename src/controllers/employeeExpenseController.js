@@ -704,8 +704,13 @@ exports.addExpense = async (req, res) => {
     const session = await mongoose.startSession();
     session.startTransaction();
     try {
-        const employeeId = req.employee._id;
-        const { date, notes, expenses, otherExpensesList, siteIds, attendance, attendanceRemark, creditDebit } = req.body;
+        const employeeId = req.employee.id || req.employeeId || req.employee._id;
+        const { date, notes, expenses, otherExpensesList, siteIds, clientSites, attendance, attendanceRemark } = req.body;
+        
+        let creditDebit = req.body.creditDebit;
+        if (typeof creditDebit === 'string') {
+            try { creditDebit = JSON.parse(creditDebit); } catch (e) { creditDebit = {}; }
+        }
 
         const cleanNum = (val) => (!val || isNaN(Number(val)) ? 0 : Number(val));
         const rawExpenses = typeof expenses === 'string' ? JSON.parse(expenses) : (expenses || {});
@@ -751,16 +756,71 @@ exports.addExpense = async (req, res) => {
             { new: true, session }
         );
 
-        // 3. Save Expense Record
-        const siteCount = (siteIds || []).length;
-        const splitExpense = siteCount > 0 ? (totalExpense / siteCount) : 0;
-        const splitCredit = siteCount > 0 ? (totalReceived / siteCount) : 0;
+        // Parse clientSites from FormData
+        let parsedClientSites = [];
+        if (clientSites) {
+            const rawClientSites = typeof clientSites === 'string' ? JSON.parse(clientSites) : clientSites;
+            parsedClientSites = (Array.isArray(rawClientSites) ? rawClientSites : []).map(cs => ({
+                ...cs,
+                quantity: cleanNum(cs?.quantity),
+                allocatedExpense: cleanNum(cs?.allocatedExpense),
+                allocatedCredit: cleanNum(cs?.allocatedCredit),
+                files: { photos: [], dailyReports: [], data: [], drawing: [] }
+            }));
+        } else if (siteIds) {
+            const parsedSiteIds = typeof siteIds === 'string' ? JSON.parse(siteIds) : siteIds;
+            parsedClientSites = (Array.isArray(parsedSiteIds) ? parsedSiteIds : []).map(sid => ({
+                siteId: sid,
+                allocatedExpense: 0,
+                allocatedCredit: 0,
+                files: { photos: [], dailyReports: [], data: [], drawing: [] }
+            }));
+        }
 
-        const clientSites = (siteIds || []).map(sid => ({ 
-            siteId: sid,
-            allocatedExpense: splitExpense,
-            allocatedCredit: splitCredit
-        }));
+        // Process Files (from upload.any() array)
+        if (req.files && Array.isArray(req.files)) {
+            req.files.forEach(f => {
+                const normalizedPath = f.path.replace(/\\/g, '/');
+                let relativePath = normalizedPath.includes('/uploads/') ? normalizedPath.split('/uploads/')[1] : (normalizedPath.includes('/storage/') ? normalizedPath.split('/storage/')[1] : normalizedPath);
+                const fileUrl = '/uploads/' + relativePath;
+                const fileObj = { name: f.originalname, url: fileUrl, path: f.path };
+                
+                if (f.fieldname.startsWith('site_')) {
+                    const parts = f.fieldname.split('_');
+                    const siteIdx = parseInt(parts[1]);
+                    const category = parts[2];
+                    
+                    if (parsedClientSites[siteIdx]) {
+                        if (!parsedClientSites[siteIdx].files) {
+                            parsedClientSites[siteIdx].files = { photos: [], dailyReports: [], data: [], drawing: [] };
+                        }
+                        let mappedCategory = category;
+                        if (category === 'dailyReports') mappedCategory = 'dailyReports';
+                        else if (category === 'data') mappedCategory = 'data';
+                        else if (category === 'drawing') mappedCategory = 'drawing';
+                        else if (category === 'photos') mappedCategory = 'photos';
+                        
+                        if (parsedClientSites[siteIdx].files[mappedCategory]) {
+                            parsedClientSites[siteIdx].files[mappedCategory].push(fileObj);
+                        } else {
+                            parsedClientSites[siteIdx].files[mappedCategory] = [fileObj];
+                        }
+                    }
+                }
+            });
+        }
+
+        // Spread expenses equally among sites if not explicitly provided
+        const siteCount = parsedClientSites.length;
+        if (siteCount > 0) {
+            const splitExpense = totalExpense / siteCount;
+            const splitCredit = totalReceived / siteCount;
+            parsedClientSites = parsedClientSites.map(cs => ({
+                ...cs,
+                allocatedExpense: cs.allocatedExpense || splitExpense,
+                allocatedCredit: cs.allocatedCredit || splitCredit
+            }));
+        }
         
         let calculatedAttendance = attendance;
         let calculatedRemark = attendanceRemark;
@@ -798,7 +858,7 @@ exports.addExpense = async (req, res) => {
         const newExpense = new EmployeeExpense({
             employeeId,
             date: date || new Date(),
-            clientSites,
+            clientSites: parsedClientSites,
             expenses: parsedExpenses,
             otherExpensesList: parsedOtherExpenses,
             totalExpense,
@@ -901,7 +961,7 @@ exports.addExpense = async (req, res) => {
 
 exports.getExpensesForEmployee = async (req, res) => {
     try {
-        const employeeId = req.employee._id;
+        const employeeId = req.employee.id || req.employeeId || req.employee._id;
         const expenses = await EmployeeExpense.find({ employeeId })
             .populate('employeeId', 'name')
             .populate('clientSites.siteId', 'siteName siteAddress')
@@ -1191,7 +1251,7 @@ exports.getDailySummary = async (req, res) => {
                     empMap[empId].entries.push({
                         date: l.date,
                         attendance: '-',
-                        siteNames: l.relatedEmployee ? `↔ ${relatedName}` : '',
+                        siteNames: '',
                         totalExpense: 0,
                         totalDebit: l.type === 'Debit' ? l.amount : 0,
                         totalCredit: l.type === 'Credit' ? l.amount : 0,
@@ -1507,5 +1567,36 @@ exports.bulkSaveAttendance = async (req, res) => {
     } catch (error) {
         console.error('bulkSaveAttendance Error:', error);
         res.status(500).json({ success: false, message: error.message });
+    }
+};
+
+exports.deleteFile = async (req, res) => {
+    try {
+        const { id, siteIdx, category, fileId } = req.params;
+        const EmployeeExpense = require('../models/EmployeeExpense');
+        const expense = await EmployeeExpense.findById(id);
+        if (!expense) return res.status(404).json({ success: false, message: 'Expense not found' });
+
+        if (!expense.clientSites || !expense.clientSites[siteIdx]) {
+            return res.status(404).json({ success: false, message: 'Site not found' });
+        }
+
+        const site = expense.clientSites[siteIdx];
+        if (!site.files || !site.files[category]) {
+            return res.status(404).json({ success: false, message: 'File category not found' });
+        }
+
+        const originalLength = site.files[category].length;
+        site.files[category] = site.files[category].filter(f => f._id.toString() !== fileId);
+
+        if (site.files[category].length === originalLength) {
+            return res.status(404).json({ success: false, message: 'File not found' });
+        }
+
+        await expense.save();
+        res.json({ success: true, message: 'File deleted successfully' });
+    } catch (err) {
+        console.error('Failed to delete file', err);
+        res.status(500).json({ success: false, message: 'Server Error' });
     }
 };

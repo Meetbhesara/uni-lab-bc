@@ -4,14 +4,15 @@ const multer = require('multer');
 const path = require('path');
 const fs = require('fs');
 const auth = require('../middlewares/auth');
+
 const {
     getSchedules,
+    getLastAssignment,
+    getSitesByClient,
     createSchedule,
     updateSchedule,
     completeSchedule,
     rejectSchedule,
-    getSitesByClient,
-    getLastAssignment,
     updateInvoiceStatus,
     generateSchedulerInvoice,
     pauseMonth,
@@ -33,8 +34,31 @@ const storage = multer.diskStorage({
 
         try {
             // We expect clientId (short ID) and siteSubfolder in req.body
-            const clientShortId = (req.body.clientShortId || 'unknown_client').toLowerCase();
-            const siteSubfolder = (req.body.siteSubfolder || 'unknown_site').toLowerCase();
+            let clientShortId = (req.body.clientShortId || 'unknown_client').toLowerCase();
+            let siteSubfolder = (req.body.siteSubfolder || 'unknown_site').toLowerCase();
+
+            // Attempt to resolve from DB using req.params.id (schedule ID)
+            if (req.params && req.params.id) {
+                try {
+                    const ScheduleMaster = require('../models/ScheduleMaster');
+                    const ClientMaster = require('../models/ClientMaster');
+                    const SiteMaster = require('../models/SiteMaster');
+                    
+                    const sched = await ScheduleMaster.findById(req.params.id);
+                    if (sched) {
+                        const clientData = await ClientMaster.findById(sched.client);
+                        if (clientData && clientData.clientId) {
+                            clientShortId = clientData.clientId.toLowerCase();
+                        }
+                        const siteData = await SiteMaster.findById(sched.site);
+                        if (siteData && siteData.siteName) {
+                            siteSubfolder = siteData.siteName.trim().replace(/[<>:"\/\\|?*]+/g, '_');
+                        }
+                    }
+                } catch (dbErr) {
+                    console.error('Error fetching schedule details for multer:', dbErr);
+                }
+            }
 
             let targetDir;
             if (useNas) {
@@ -49,8 +73,11 @@ const storage = multer.diskStorage({
             let sub = 'data'; 
             if (file.fieldname === 'photos') sub = 'photos';
             else if (file.fieldname === 'dailyReports') sub = 'Daily_report';
-            else if (['collectedFiles', 'convertedFiles', 'liningDrawFiles', 'esurveyWorkFiles', 'finalCheckingFiles', 'mailFiles'].includes(file.fieldname)) {
+            else if (['collectedFiles', 'convertedFiles', 'liningDrawFiles', 'esurveyWorkFiles', 'finalCheckingFiles'].includes(file.fieldname)) {
                 sub = 'drawing'; // save in drawing directory
+            }
+            else if (file.fieldname === 'mailFiles') {
+                sub = 'Mail'; // save in Mail directory
             }
 
             const subPath = path.join(targetDir, sub);

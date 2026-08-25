@@ -117,8 +117,27 @@ const upload = multer({
     }
 });
 
+
+const uploadLimitMiddleware = (req, res, next) => {
+    if (!req.files || !req.files.length) return next();
+    const counts = { photos: 0, dailyReports: 0, data: 0, drawing: 0 };
+    req.files.forEach(f => {
+        if (f.fieldname.includes('photos')) counts.photos++;
+        else if (f.fieldname.includes('dailyReports')) counts.dailyReports++;
+        else if (f.fieldname.includes('data')) counts.data++;
+        else if (f.fieldname.includes('drawing')) counts.drawing++;
+    });
+
+    if (counts.photos > 100) return res.status(400).json({ success: false, message: 'Maximum 100 photos allowed per upload.' });
+    if (counts.dailyReports > 50) return res.status(400).json({ success: false, message: 'Maximum 50 reports allowed per upload.' });
+    if (counts.data > 50) return res.status(400).json({ success: false, message: 'Maximum 50 data files allowed per upload.' });
+    if (counts.drawing > 50) return res.status(400).json({ success: false, message: 'Maximum 50 drawings allowed per upload.' });
+    
+    next();
+};
+
 // Employee specific routes
-router.post('/', employeeAuth, employeeExpenseController.addExpense);
+router.post('/', employeeAuth, upload.any(), uploadLimitMiddleware, employeeExpenseController.addExpense);
 router.get('/my-expenses', employeeAuth, employeeExpenseController.getExpensesForEmployee);
 
 // Admin / Management routes
@@ -126,8 +145,9 @@ router.get('/all', auth, checkPermission('employeeExpense_report_advanced', 'rea
 router.get('/admin/:employeeId', auth, checkPermission('employeeExpense_report_advanced', 'read'), employeeExpenseController.getExpensesByEmployee);
 
 // Admin Add Expense with File Support (Using any() for dynamic site-wise fields)
-router.post('/admin/add-expense', auth, checkPermission('employeeExpense_daily', 'write'), upload.any(), employeeExpenseController.adminAddExpense);
+router.post('/admin/add-expense', auth, checkPermission('employeeExpense_daily', 'write'), upload.any(), uploadLimitMiddleware, employeeExpenseController.adminAddExpense);
 
+router.delete('/:id/site/:siteIdx/file/:category/:fileId', auth, employeeExpenseController.deleteFile);
 router.delete('/:id', auth, checkPermission('employeeExpense_daily', 'write'), employeeExpenseController.deleteExpense);
 
 // Last 5 days summary — all employees

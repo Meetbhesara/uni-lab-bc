@@ -36,7 +36,7 @@ const storeSiteMaster = async (req, res) => {
         const useNas = process.env.USE_NAS;
         const nasBase = process.env.NAS_BASE_PATH || '/app/storage';
         const localBase = process.env.LOCAL_BASE_PATH || './uploads';
-        const sanitizedSiteName = (siteName || 'unknown_site').trim().replace(/[^a-z0-9]/gi, '_').toLowerCase();
+        const sanitizedSiteName = (siteName || 'unknown_site').trim().replace(/[<>:"\/\\|?*]+/g, '_');
         const siteSubfolder = `${generatedSiteId}-${sanitizedSiteName}`;
 
         let targetDir;
@@ -225,7 +225,7 @@ const updateSiteMaster = async (req, res) => {
         if (files) {
             const clientData = await ClientMaster.findById(site.client);
             const clientShortId = (clientData && clientData.clientId) ? clientData.clientId.toLowerCase() : 'unknown_client';
-            const sanitizedSiteName = (site.siteName || 'unknown_site').trim().replace(/[^a-z0-9]/gi, '_').toLowerCase();
+            const sanitizedSiteName = (site.siteName || 'unknown_site').trim().replace(/[<>:"\/\\|?*]+/g, '_');
             const siteSubfolder = `${site.siteId}-${sanitizedSiteName}`;
 
             const processUpdateFiles = (fieldFiles, subfolder) => {

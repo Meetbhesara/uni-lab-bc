@@ -83,13 +83,46 @@ const createSchedule = async (req, res) => {
         });
 
         await schedule.save();
+
+        // Apply to all schedules in the group if applyToAll is true
+        if (req.body.applyToAll === 'true' && req.files && req.files['mailFiles']) {
+            if (schedule.scheduleType === 'TOPOGRAPHY SURVEY') {
+                const ScheduleMaster = require('../models/ScheduleMaster');
+                const groupSchedules = await ScheduleMaster.find({
+                    client: schedule.client,
+                    site: schedule.site,
+                    scheduleType: 'TOPOGRAPHY SURVEY',
+                    _id: { $ne: schedule._id }
+                });
+
+                for (const s of groupSchedules) {
+                    if (!s.draftingWorkFiles) s.draftingWorkFiles = {};
+                    if (!s.draftingWorkFiles.mailFiles) s.draftingWorkFiles.mailFiles = [];
+                    
+                    const mailDocs = req.files['mailFiles'].map(f => {
+                        let fileUrl = `/uploads/${path.basename(f.path)}`;
+                        if (clientShortId && siteSubfolder) {
+                            fileUrl = `/uploads/client_master/${clientShortId}/site_master/${siteSubfolder}/Mail/${path.basename(f.path)}`;
+                        }
+                        return {
+                            name: f.originalname,
+                            url: fileUrl,
+                            uploadedAt: new Date()
+                        };
+                    });
+                    
+                    s.draftingWorkFiles.mailFiles.push(...mailDocs);
+                    await s.save();
+                }
+            }
+        }
         const populated = await ScheduleMaster.findById(schedule._id)
             .populate('client', 'clientName clientId')
             .populate('site', 'siteName siteId siteAddress stateName stateCode ledgerItems')
-            .populate('operative', 'name phone')
+               .populate('operative', 'name phone')
             .populate('helpers', 'name phone')
             .populate('vehicle', 'vehicleNumber vehicleName')
-            .populate('instruments', 'instrumentName serialNo model');
+            .populate('instruments', 'instrumentName serialNo model photo photos');
 
         broadcast('schedule-changed', { action: 'created', id: schedule._id });
         res.status(201).json({ success: true, message: 'Schedule created successfully', data: populated });
@@ -214,6 +247,7 @@ const updateSchedule = async (req, res) => {
         // AUTOMATIC EXPENSE & DOCUMENT TRANSFER WHEN OPERATIVE IS CHANGED
         // ─────────────────────────────────────────────────────────────────────────
         let cancelledOperative = null;
+        let cancelledHelpers = [];
         let cancelledSiteName = '';
         let cancelledDate = '';
         
@@ -350,7 +384,7 @@ const updateSchedule = async (req, res) => {
             .populate('operative', 'name phone')
             .populate('helpers', 'name phone')
             .populate('vehicle', 'vehicleNumber vehicleName')
-            .populate('instruments', 'instrumentName serialNo model');
+            .populate('instruments', 'instrumentName serialNo model photo photos');
 
         if (!schedule) {
             return res.status(404).json({ success: false, message: 'Schedule not found' });
@@ -419,12 +453,26 @@ const updateSchedule = async (req, res) => {
             try {
                 let cancelMsg = `*Schedule Cancelled*\n\n`;
                 cancelMsg += `Sorry ${cancelledOperative.name},\n`;
-                cancelMsg += `Your scheduled visit for *${cancelledSiteName}* on *${cancelledDate}* has been cancelled or reassigned.\n`;
-                cancelMsg += `Please check with the admin for your next assignment.`;
+                cancelMsg += `Your scheduled visit for *${cancelledSiteName}* on *${cancelledDate}* has been cancelled.\n`;
                 
                 await sendWhatsapp(cancelledOperative.phone, cancelMsg, req.user?.id);
             } catch (err) {
                 console.error('[WhatsApp] Failed to send cancellation message:', err.message);
+            }
+        }
+
+        // 1.5 Send Cancellation to Removed Helpers
+        if (cancelledHelpers && cancelledHelpers.length > 0) {
+            for (const helper of cancelledHelpers) {
+                try {
+                    let cancelMsg = `*Schedule Cancelled (Helper)*\n\n`;
+                    cancelMsg += `Sorry ${helper.name},\n`;
+                    cancelMsg += `Your scheduled helper visit for *${cancelledSiteName}* on *${cancelledDate}* has been cancelled.\n`;
+                    
+                    await sendWhatsapp(helper.phone, cancelMsg, req.user?.id);
+                } catch (err) {
+                    console.error('[WhatsApp] Failed to send cancellation message to helper:', err.message);
+                }
             }
         }
 
@@ -433,9 +481,20 @@ const updateSchedule = async (req, res) => {
             try {
                 const siteName = schedule.site?.siteName || 'N/A';
                 const location = schedule.site?.siteAddress || 'N/A';
-                const contactPerson = (schedule.site?.contactPersons && schedule.site.contactPersons.length > 0) ? schedule.site.contactPersons[0] : 'N/A';
-                const contactPhone = (schedule.site?.contactPhone && schedule.site.contactPhone.length > 0) ? schedule.site.contactPhone[0] : 'N/A';
-                const helpers = (schedule.helpers && schedule.helpers.length > 0) ? schedule.helpers.map(h => h.name).join(', ') : 'None';
+                
+                let contactPerson = 'N/A';
+                if (schedule.site?.contactPersons && schedule.site.contactPersons.length > 0) {
+                    contactPerson = schedule.site.contactPersons[0].name || 'N/A';
+                }
+                
+                let contactPhone = schedule.site?.contactPhone || 'N/A';
+                if (contactPhone === 'N/A' && schedule.site?.contactPersons && schedule.site.contactPersons.length > 0) {
+                    contactPhone = schedule.site.contactPersons[0].phone || 'N/A';
+                }
+                
+                const helpers = (schedule.helpers && schedule.helpers.length > 0) ? schedule.helpers.map(h => h.name || 'Unknown').join(', ') : 'None';
+                const vehicle = schedule.vehicle ? `${schedule.vehicle.vehicleNumber || ''} - ${schedule.vehicle.vehicleName || ''}`.replace(/^- | -$/, '').trim() : 'None';
+                const instruments = (schedule.instruments && schedule.instruments.length > 0) ? schedule.instruments.map(i => i.instrumentName || i.serialNo || 'Unknown').join(', ') : 'None';
                 
                 let msg = `*Work Assignment*\n\n`;
                 if (schedule.scheduleDate) {
@@ -446,10 +505,40 @@ const updateSchedule = async (req, res) => {
                 msg += `*Contact Person:* ${contactPerson}\n`;
                 msg += `*Contact No:* ${contactPhone}\n`;
                 msg += `*Helpers:* ${helpers}\n`;
+                msg += `*Vehicle:* ${vehicle}\n`;
+                msg += `*Instruments:* ${instruments}\n`;
                 
                 await sendWhatsapp(schedule.operative.phone, msg, req.user?.id);
             } catch (whatsappErr) {
                 console.error('[WhatsApp] Failed to send assignment message:', whatsappErr.message);
+            }
+        }
+
+        // 3. Send Assignment Notification to each Helper
+        if ('helpers' in updates && schedule.helpers && schedule.helpers.length > 0) {
+            const siteName   = schedule.site?.siteName    || 'N/A';
+            const location   = schedule.site?.siteAddress || 'N/A';
+            const schedDate  = schedule.scheduleDate
+                ? new Date(schedule.scheduleDate).toLocaleDateString('en-GB')
+                : 'N/A';
+            const operativeName = schedule.operative?.name || 'N/A';
+
+            for (const helper of schedule.helpers) {
+                if (!helper?.phone) continue;
+                try {
+                    let helperMsg  = `*Work Assignment (Helper)*\n\n`;
+                    helperMsg += `Hi ${helper.name},\n`;
+                    helperMsg += `You have been assigned as a *Helper* for the following visit:\n\n`;
+                    helperMsg += `*Date:* ${schedDate}\n`;
+                    helperMsg += `*Site Name:* ${siteName}\n`;
+                    helperMsg += `*Location:* ${location}\n`;
+                    helperMsg += `*Team Leader (Operative):* ${operativeName}\n`;
+                    helperMsg += `\nPlease report on time. Contact admin if you have any questions.`;
+
+                    await sendWhatsapp(helper.phone, helperMsg, req.user?.id);
+                } catch (helperWaErr) {
+                    console.error(`[WhatsApp] Failed to send helper assignment to ${helper.name}:`, helperWaErr.message);
+                }
             }
         }
 
@@ -664,7 +753,7 @@ const getSchedules = async (req, res) => {
             .populate('operative', 'name phone')
             .populate('helpers', 'name phone')
             .populate('vehicle', 'vehicleNumber vehicleName')
-            .populate('instruments', 'instrumentName serialNo model')
+            .populate('instruments', 'instrumentName serialNo model photo photos')
             .sort({ scheduleDate: 1 })
             .lean(); // Use lean to allow modification
 
@@ -1340,7 +1429,8 @@ const uploadDraftingWorkFiles = async (req, res) => {
                 const docs = req.files[cat].map(f => {
                     let fileUrl = `/uploads/${path.basename(f.path)}`;
                     if (clientShortId && siteSubfolder) {
-                        fileUrl = `/uploads/client_master/${clientShortId}/site_master/${siteSubfolder}/drawing/${path.basename(f.path)}`;
+                        const folderName = cat === 'mailFiles' ? 'Mail' : 'drawing';
+                        fileUrl = `/uploads/client_master/${clientShortId}/site_master/${siteSubfolder}/${folderName}/${path.basename(f.path)}`;
                     }
                     const docObj = {
                         name: f.originalname,

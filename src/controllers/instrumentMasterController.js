@@ -3,24 +3,31 @@ const InstrumentGroup = require('../models/InstrumentGroup');
 const path = require('path');
 const { broadcast } = require('../utils/sseManager');
 
+// Helper to compute /uploads/instrument_master/... relative URL from disk file path
+const computePhotoUrl = (filePath) => {
+    const normalized = filePath.replace(/\\/g, '/');
+    const idx = normalized.indexOf('/instrument_master/');
+    if (idx !== -1) {
+        return `/uploads${normalized.substring(idx)}`;
+    }
+    return `/uploads/instrument_master/${path.basename(filePath)}`;
+};
+
 const storeInstrumentMaster = async (req, res) => {
     try {
-
-        const { model, serialNo, instrumentName, notes } = req.body;
+        const { model, serialNo, instrumentName, notes, parentInstrumentId, primaryPhotoName, primaryPhotoUrl } = req.body;
         const files = req.files;
 
         if (!serialNo) {
             return res.status(400).json({ success: false, message: 'Serial number is required' });
         }
 
-        const subfolder = `${serialNo || 'no_serial'}-${model || 'no_model'}`.trim().replace(/[^a-z0-9]/gi, '_').toLowerCase();
-
         let photoData = null;
         if (files && files.photo) {
             const f = Array.isArray(files.photo) ? files.photo[0] : files.photo;
             photoData = {
                 name: f.originalname,
-                url: `/uploads/instrument_master/${subfolder}/${path.basename(f.path)}`,
+                url: computePhotoUrl(f.path),
                 path: f.path
             };
         }
@@ -30,15 +37,29 @@ const storeInstrumentMaster = async (req, res) => {
             const flist = Array.isArray(files.photos) ? files.photos : [files.photos];
             photosData = flist.map(f => ({
                 name: f.originalname,
-                url: `/uploads/instrument_master/${subfolder}/${path.basename(f.path)}`,
+                url: computePhotoUrl(f.path),
                 path: f.path
             }));
+        }
+
+        // Set primary photo
+        if (primaryPhotoUrl) {
+            const match = photosData.find(p => p.url === primaryPhotoUrl);
+            if (match) photoData = match;
+        } else if (primaryPhotoName) {
+            const match = photosData.find(p => p.name === primaryPhotoName);
+            if (match) photoData = match;
+        }
+        
+        if (!photoData && photosData.length > 0) {
+            photoData = photosData[0];
         }
 
         const record = new InstrumentMaster({
             model: model ? model.trim() : null,
             serialNo: serialNo.trim(),
             instrumentName: instrumentName ? instrumentName.trim() : null,
+            parentInstrumentId: parentInstrumentId || null,
             photo: photoData,
             photos: photosData,
             notes: notes ? notes.trim() : null
@@ -53,7 +74,6 @@ const storeInstrumentMaster = async (req, res) => {
         });
     } catch (error) {
         console.error('Error in storeInstrumentMaster:', error);
-        // Handle duplicate refNo
         if (error.code === 11000) {
             return res.status(409).json({
                 success: false,
@@ -91,7 +111,7 @@ const getInstrumentById = async (req, res) => {
 
 const updateInstrumentMaster = async (req, res) => {
     try {
-        const { model, serialNo, instrumentName, notes } = req.body;
+        const { model, serialNo, instrumentName, notes, parentInstrumentId, existingPhotos, primaryPhotoUrl, primaryPhotoName } = req.body;
         const files = req.files;
 
         const record = await InstrumentMaster.findById(req.params.id);
@@ -104,30 +124,55 @@ const updateInstrumentMaster = async (req, res) => {
         if (serialNo !== undefined) updateData.serialNo = serialNo.trim();
         if (instrumentName !== undefined) updateData.instrumentName = instrumentName ? instrumentName.trim() : null;
         if (notes !== undefined) updateData.notes = notes ? notes.trim() : null;
+        if (parentInstrumentId !== undefined) updateData.parentInstrumentId = parentInstrumentId ? parentInstrumentId : null;
 
-        // Determine subfolder for URL (use provided or fallback to existing)
-        const finalSerial = serialNo !== undefined ? serialNo : record.serialNo;
-        const finalModel = model !== undefined ? model : record.model;
-        const subfolder = `${finalSerial || 'no_serial'}-${finalModel || 'no_model'}`.trim().replace(/[^a-z0-9]/gi, '_').toLowerCase();
+        let finalPhotos = [];
+        
+        // 1. Process existing photos
+        if (existingPhotos) {
+            const eList = Array.isArray(existingPhotos) ? existingPhotos : [existingPhotos];
+            const currentPhotos = record.photos || [];
+            eList.forEach(url => {
+                const match = currentPhotos.find(p => p.url === url);
+                if (match) finalPhotos.push(match);
+                else if (record.photo && record.photo.url === url) finalPhotos.push(record.photo);
+            });
+        }
 
+        // 2. Process new photos
         if (files) {
             if (files.photo) {
                 const f = Array.isArray(files.photo) ? files.photo[0] : files.photo;
                 updateData.photo = {
                     name: f.originalname,
-                    url: `/uploads/instrument_master/${subfolder}/${path.basename(f.path)}`,
+                    url: computePhotoUrl(f.path),
                     path: f.path
                 };
             }
             if (files.photos) {
                 const flist = Array.isArray(files.photos) ? files.photos : [files.photos];
-                const photos = flist.map(f => ({
+                const newPhotosData = flist.map(f => ({
                     name: f.originalname,
-                    url: `/uploads/instrument_master/${subfolder}/${path.basename(f.path)}`,
+                    url: computePhotoUrl(f.path),
                     path: f.path
                 }));
-                updateData.photos = photos;
+                finalPhotos = finalPhotos.concat(newPhotosData);
             }
+        }
+
+        updateData.photos = finalPhotos;
+
+        // 3. Set Primary Photo
+        if (primaryPhotoUrl) {
+            const match = finalPhotos.find(p => p.url === primaryPhotoUrl);
+            if (match) updateData.photo = match;
+        } else if (primaryPhotoName) {
+            const match = finalPhotos.find(p => p.name === primaryPhotoName);
+            if (match) updateData.photo = match;
+        } else if (finalPhotos.length > 0) {
+            updateData.photo = finalPhotos[0];
+        } else {
+            updateData.photo = null;
         }
 
         const updatedRecord = await InstrumentMaster.findByIdAndUpdate(
@@ -156,6 +201,10 @@ const deleteInstrumentMaster = async (req, res) => {
         if (!record) {
             return res.status(404).json({ success: false, message: 'Instrument not found' });
         }
+        
+        // nullify children's parent references
+        await InstrumentMaster.updateMany({ parentInstrumentId: req.params.id }, { $set: { parentInstrumentId: null } });
+
         broadcast('instrument-changed', { action: 'deleted' });
         res.json({ success: true, message: 'Instrument deleted successfully' });
     } catch (error) {
@@ -194,15 +243,13 @@ const createGroup = async (req, res) => {
             return res.status(400).json({ success: false, message: 'Group name is required' });
         }
 
-        // Verify no instrument is already in any group
         if (instruments && instruments.length > 0) {
             const existing = await InstrumentGroup.findOne({ instruments: { $in: instruments } });
             if (existing) {
-                return res.status(400).json({ success: false, message: 'One or more selected instruments are already assigned to another group.' });
+                return res.status(400).json({ success: false, message: 'One or more instruments are already assigned to another group.' });
             }
         }
 
-        // Generate groupId
         const lastGroup = await InstrumentGroup.findOne({}, { groupId: 1 }).sort({ groupId: -1 });
         let nextSeq = 1;
         if (lastGroup && lastGroup.groupId) {
@@ -211,19 +258,10 @@ const createGroup = async (req, res) => {
         }
         const groupId = 'GRP-' + String(nextSeq).padStart(3, '0');
 
-        const newGroup = new InstrumentGroup({
-            groupId,
-            name: name.trim(),
-            instruments: instruments || []
-        });
-
-        await newGroup.save();
-        broadcast('instrument-changed', { action: 'group-created' });
-        res.status(201).json({ success: true, message: 'Group created successfully', data: newGroup });
+        const group = new InstrumentGroup({ groupId, name, instruments: instruments || [] });
+        await group.save();
+        res.status(201).json({ success: true, message: 'Group created successfully', data: group });
     } catch (error) {
-        if (error.code === 11000) {
-            return res.status(409).json({ success: false, message: 'Group name already exists' });
-        }
         res.status(500).json({ success: false, message: error.message });
     }
 };
@@ -235,28 +273,20 @@ const updateGroup = async (req, res) => {
         if (!group) {
             return res.status(404).json({ success: false, message: 'Group not found' });
         }
-
-        // Verify no instrument is already in another group
+        
         if (instruments && instruments.length > 0) {
-            const existing = await InstrumentGroup.findOne({
-                _id: { $ne: req.params.id },
-                instruments: { $in: instruments }
-            });
+            const existing = await InstrumentGroup.findOne({ _id: { $ne: group._id }, instruments: { $in: instruments } });
             if (existing) {
-                return res.status(400).json({ success: false, message: 'One or more selected instruments are already assigned to another group.' });
+                return res.status(400).json({ success: false, message: 'One or more instruments are already assigned to another group.' });
             }
         }
 
-        if (name !== undefined) group.name = name.trim();
+        group.name = name || group.name;
         if (instruments !== undefined) group.instruments = instruments;
-
+        
         await group.save();
-        broadcast('instrument-changed', { action: 'group-updated' });
         res.json({ success: true, message: 'Group updated successfully', data: group });
     } catch (error) {
-        if (error.code === 11000) {
-            return res.status(409).json({ success: false, message: 'Group name already exists' });
-        }
         res.status(500).json({ success: false, message: error.message });
     }
 };
@@ -267,7 +297,6 @@ const deleteGroup = async (req, res) => {
         if (!group) {
             return res.status(404).json({ success: false, message: 'Group not found' });
         }
-        broadcast('instrument-changed', { action: 'group-deleted' });
         res.json({ success: true, message: 'Group deleted successfully' });
     } catch (error) {
         res.status(500).json({ success: false, message: error.message });

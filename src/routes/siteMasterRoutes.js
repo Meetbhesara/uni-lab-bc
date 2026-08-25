@@ -64,7 +64,7 @@ const storage = multer.diskStorage({
 
             // Sanitize site name and combine with siteId for folder naming
             siteId = siteId || 'unknown_id';
-            const siteNamePart = (siteName || 'unknown_site').trim().replace(/[^a-z0-9]/gi, '_').toLowerCase();
+            const siteNamePart = (siteName || 'unknown_site').trim().replace(/[<>:"\/\\|?*]+/g, '_');
             const siteSubfolder = `${siteId}-${siteNamePart}`;
 
             let targetDir;

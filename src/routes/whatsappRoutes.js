@@ -48,12 +48,12 @@ router.post('/send-quotation', auth, async (req, res) => {
     try {
         const { logToFile } = require('../utils/whatsappService');
         const adminId = req.user?.id;
-        
+
         console.log('\n--- [DEBUG] WhatsApp Quotation Request Received ---');
         logToFile('[DEBUG] WhatsApp Quotation Request Received', req.body);
 
         const { quotationId, phone, message, pdfUrl, pdfPath } = req.body;
-        
+
         let targetPhone = phone;
         let targetPdf = pdfUrl || pdfPath;
         let targetMessage = message;
@@ -67,16 +67,17 @@ router.post('/send-quotation', auth, async (req, res) => {
                 if (!targetMessage) {
                     targetMessage = `Hello ${quotation.enquiry.Name},\n\nHere is your quotation (Ref: ${quotation.refNo}) from Unique Engineering.`;
                 }
-                
+
                 // Always generate FRESH pdf from htmlContent
                 if (quotation.htmlContent) {
                     const filename = `quotation_${quotation._id}.pdf`;
+                    const STORAGE_DIR = process.env.LOCAL_BASE_PATH || path.join(process.cwd(), 'uploads');
                     const absoluteOutPath = path.join(STORAGE_DIR, filename);
-                    
+
                     console.log(`[Puppeteer] Generating on-the-fly PDF at: ${absoluteOutPath}`);
                     await generateQuotationPDF(quotation.htmlContent, absoluteOutPath);
                     targetPdf = `uploads/${filename}`; // Relative path for the sender
-                    
+
                     // Save back into DB for future references
                     if (quotation.pdfPath !== targetPdf) {
                         quotation.pdfPath = targetPdf;
@@ -103,7 +104,7 @@ router.post('/send-quotation', auth, async (req, res) => {
         }
 
         await sendWhatsappMedia(targetPhone, targetPdf, targetMessage, adminId);
-        
+
         res.status(200).json({ success: true, msg: 'WhatsApp quotation sent!' });
     } catch (e) {
         console.error(`[DEBUG] Exception in /send-quotation handler:`, e);
@@ -113,11 +114,14 @@ router.post('/send-quotation', auth, async (req, res) => {
     }
 });
 
+const User = require('../models/User');
+const Enquiry = require('../models/Enquiry');
+
 router.post('/send-product', auth, async (req, res) => {
     try {
         const { phone, imageUrl, caption } = req.body;
         const adminId = req.user?.id;
-        
+
         // Find or create user so they appear in the user table
         let user = await User.findOne({ phone });
         if (!user) {
@@ -140,9 +144,6 @@ router.post('/send-product', auth, async (req, res) => {
     }
 });
 
-const User = require('../models/User');
-const Enquiry = require('../models/Enquiry');
-
 router.post('/send-multiple-products', auth, async (req, res) => {
     try {
         const { phone, companyName, contactPersonName, email, products } = req.body;
@@ -151,16 +152,16 @@ router.post('/send-multiple-products', auth, async (req, res) => {
         if (!phone) {
             return res.status(400).json({ success: false, error: 'Phone number is required' });
         }
-        
+
         let targetEmail = email;
         if (!targetEmail) {
             targetEmail = `${phone}@gmail.com`;
         }
-        
+
         // 1. Find or create user
         let user = await User.findOne({ phone });
         if (!user) user = await User.findOne({ email: targetEmail.toLowerCase() });
-        
+
         if (!user) {
             user = new User({
                 email: targetEmail.toLowerCase(),
@@ -207,20 +208,20 @@ router.post('/send-multiple-products', auth, async (req, res) => {
         // We will send an intro message, followed by product messages
         let introMsg = `Hello ${contactPersonName || companyName || 'there'},\n\nHere are the products you requested from Unique Engineering:\n\n`;
         await sendWhatsapp(phone, introMsg, null);
-        
+
         // Add a small delay so messages arrive in order
         const delay = ms => new Promise(res => setTimeout(res, ms));
 
         for (const prod of products) {
             await delay(1500); // 1.5s delay between messages to avoid rate limit or out-of-order delivery
-            
+
             const caption = `🚀 *${prod.name?.toUpperCase()}*\n\n` +
                             `📦 *Category:* ${prod.category || 'General'}\n\n` +
                             `📝 *Description:*\n${prod.description || 'No description provided'}\n\n` +
                             `🌐 *View on Website:* https://uniquenas.tail57739c.ts.net/product/${prod._id}`;
-                            
+
             const imgPath = prod.localImages?.[0] || prod.images?.[0] || prod.photos?.[0];
-            
+
             if (imgPath) {
                 try {
                     await sendWhatsappMedia(phone, imgPath, caption, null);
@@ -232,7 +233,7 @@ router.post('/send-multiple-products', auth, async (req, res) => {
                 await sendWhatsapp(phone, caption, null);
             }
         }
-        
+
         await delay(1000);
         await sendWhatsapp(phone, `Please let us know if you have any questions or would like a formal quotation.\n\nThank you!`, null);
 
@@ -242,7 +243,6 @@ router.post('/send-multiple-products', auth, async (req, res) => {
         res.status(500).json({ success: false, error: e.message });
     }
 });
-
 
 router.post('/send-invoice', auth, async (req, res) => {
     try {
@@ -315,4 +315,3 @@ router.post('/send-invoice', auth, async (req, res) => {
 });
 
 module.exports = router;
-

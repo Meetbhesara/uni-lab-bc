@@ -5,6 +5,7 @@ const path = require('path');
 const fs = require('fs');
 const auth = require('../middlewares/auth');
 const checkPermission = require('../middlewares/checkPermission');
+const InstrumentMaster = require('../models/InstrumentMaster');
 const {
     storeInstrumentMaster,
     getInstruments,
@@ -19,31 +20,58 @@ const {
 } = require('../controllers/instrumentMasterController');
 
 // Dynamic Storage Configuration (NAS / Local)
+// Folder naming format: [serialNo]-[instrumentName]
+// Child folders are directly inside parent folder: [parent_serial]-[parent_name]/[child_serial]-[child_name]
 const storage = multer.diskStorage({
-    destination: (req, file, cb) => {
+    destination: async (req, file, cb) => {
         try {
             const useNas = process.env.USE_NAS;
             let nasBase = process.env.NAS_BASE_PATH || '/app/storage';
             if (useNas === 'true' && !nasBase.startsWith('/')) nasBase = '/' + nasBase;
             const localBase = process.env.LOCAL_BASE_PATH || './uploads';
 
-            const { serialNo, model } = req.body;
-            const subfolder = `${serialNo || 'no_serial'}-${model || 'no_model'}`.trim().replace(/[^a-z0-9]/gi, '_').toLowerCase();
+            const { serialNo, instrumentName, model, parentInstrumentId } = req.body;
+            
+            const sanitizeFolderName = (sNo, name, mdl) => {
+                const part1 = (sNo || 'no_serial').trim();
+                const part2 = (name || mdl || 'instrument').trim();
+                return `${part1}-${part2}`.replace(/[/\\:*?"<>|]/g, '_').replace(/\s+/g, '_');
+            };
 
-            let targetDir;
+            const currentFolder = sanitizeFolderName(serialNo, instrumentName, model);
+
+            let parentFolder = null;
+            if (parentInstrumentId) {
+                try {
+                    const parentDoc = await InstrumentMaster.findById(parentInstrumentId);
+                    if (parentDoc) {
+                        parentFolder = sanitizeFolderName(parentDoc.serialNo, parentDoc.instrumentName, parentDoc.model);
+                    }
+                } catch (e) {
+                    console.error('Error fetching parent for multer destination:', e);
+                }
+            }
+
+            let baseDir;
             if (useNas === 'true') {
-                targetDir = path.join(nasBase, 'instrument_master', subfolder);
-                console.log('NAS MODE: targetDir is', targetDir);
+                baseDir = path.join(nasBase, 'instrument_master');
             } else {
                 const absoluteLocalBase = path.isAbsolute(localBase)
                     ? localBase
                     : path.join(process.cwd(), localBase);
-                targetDir = path.join(absoluteLocalBase, 'instrument_master', subfolder);
-                console.log('LOCAL MODE: targetDir is', targetDir);
+                baseDir = path.join(absoluteLocalBase, 'instrument_master');
+            }
+
+            let targetDir;
+            if (parentFolder) {
+                // Child folder directly inside parent folder
+                targetDir = path.join(baseDir, parentFolder, currentFolder);
+            } else {
+                // Parent / Standalone unit folder
+                targetDir = path.join(baseDir, currentFolder);
             }
 
             if (!fs.existsSync(targetDir)) {
-                console.log('Creating directory:', targetDir);
                 fs.mkdirSync(targetDir, { recursive: true });
             }
             cb(null, targetDir);
@@ -60,9 +88,9 @@ const storage = multer.diskStorage({
 
 const upload = multer({
     storage,
-    limits: { fileSize: 100 * 1024 * 1024 }, // Increased to 100MB to support high-res photos and documents
+    limits: { fileSize: 100 * 1024 * 1024 },
     fileFilter: (req, file, cb) => {
-        cb(null, true); // Support all file types (images, PDFs, CAD drawings, spreadsheets, etc.) without restriction
+        cb(null, true);
     }
 });
 

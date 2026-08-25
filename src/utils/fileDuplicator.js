@@ -24,6 +24,15 @@ const duplicateTopographySiteFile = (filePath, scheduleType) => {
 
         // Normalize slashes for comparison and replacement
         const normFilePath = filePath.replace(/\\/g, '/');
+        
+        // ONLY BACKUP photos, data, and Mail folders for topography surveys
+        const validFolders = ['/photos/', '/data/', '/Mail/'];
+        const shouldBackup = validFolders.some(folder => normFilePath.includes(folder));
+        
+        if (!shouldBackup) {
+            return; // Skip backup for folders like drawing, Daily_report, etc.
+        }
+
         let backupFilePath = '';
 
         if (normFilePath.includes('/client_master/')) {
