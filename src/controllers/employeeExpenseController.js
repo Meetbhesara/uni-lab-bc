@@ -1048,6 +1048,17 @@ exports.getAttendanceByDate = async (req, res) => {
 // ── POST: Bulk upsert attendance for unscheduled employees (no money touched) ──
 exports.getDailySummary = async (req, res) => {
     try {
+        const toLocalDateKey = (d) => {
+            if (!d) return '';
+            if (typeof d === 'string') {
+                const trimmed = d.trim();
+                if (/^\d{4}-\d{2}-\d{2}$/.test(trimmed)) return trimmed;
+            }
+            const dt = new Date(d);
+            if (isNaN(dt.getTime())) return '';
+            return dt.toLocaleDateString('en-CA', { timeZone: 'Asia/Kolkata' });
+        };
+
         // Last 5 calendar days (today inclusive)
         const today = new Date();
         today.setHours(23, 59, 59, 999);
@@ -1055,21 +1066,7 @@ exports.getDailySummary = async (req, res) => {
         fiveDaysAgo.setDate(fiveDaysAgo.getDate() - 4);
         fiveDaysAgo.setHours(0, 0, 0, 0);
 
-        const expenses = await EmployeeExpense.find({
-            date: { $gte: fiveDaysAgo, $lte: today }
-        })
-            .populate('employeeId', 'name totalAmount foodAllowance status')
-            .populate('clientSites.clientId', 'clientName')
-            .populate('clientSites.siteId', 'siteName')
-            .populate('creditDebit.givenTo.employeeRef', 'name')
-            .populate('creditDebit.receivedFrom.employeeRef', 'name')
-            .sort({ 'employeeId': 1, date: -1 })
-            .lean();
-
         // ── Fetch all schedules in the last-5-days window ──────────────────────
-        // Scheduled operatives/helpers who never submitted an expense are
-        // completely invisible in the report otherwise (attendanceScheduler
-        // intentionally skips creating an EmployeeExpense for them).
         const ScheduleMaster = require('../models/ScheduleMaster');
         const schedules = await ScheduleMaster.find({
             scheduleDate: { $gte: fiveDaysAgo, $lte: today },
@@ -1078,13 +1075,31 @@ exports.getDailySummary = async (req, res) => {
             .populate('operative', 'name status')
             .populate('helpers', 'name status')
             .populate('site', 'siteName')
+            .populate('client', 'clientName')
+            .lean();
+
+        const schedIdsInWindow = schedules.map(s => s._id);
+
+        const expenses = await EmployeeExpense.find({
+            $or: [
+                { date: { $gte: fiveDaysAgo, $lte: today } },
+                { 'clientSites.scheduleId': { $in: schedIdsInWindow } }
+            ]
+        })
+            .populate('employeeId', 'name totalAmount foodAllowance status')
+            .populate('clientSites.clientId', 'clientName')
+            .populate('clientSites.siteId', 'siteName')
+            .populate('clientSites.scheduleId', 'scheduleDate date')
+            .populate('creditDebit.givenTo.employeeRef', 'name')
+            .populate('creditDebit.receivedFrom.employeeRef', 'name')
+            .sort({ 'employeeId': 1, date: -1 })
             .lean();
 
         // Build a map: "empId|YYYY-MM-DD" → { empName, siteName } for scheduled-only entries
         // We will use this after building empMap from expenses to fill any gaps.
         const scheduledPresenceMap = {}; // key: `${empId}|${dateKey}`
         schedules.forEach(s => {
-            const dateKey = new Date(s.scheduleDate).toISOString().split('T')[0];
+            const dateKey = toLocalDateKey(s.scheduleDate);
             const siteName = s.site?.siteName || '';
             const addEntry = (emp) => {
                 if (!emp || emp.status === 'Deactive') return;
@@ -1148,7 +1163,7 @@ exports.getDailySummary = async (req, res) => {
         // Generate dateStr keys for the 5-day window
         const windowDateKeys = [];
         for (let d = new Date(fiveDaysAgo); d <= today; d.setDate(d.getDate() + 1)) {
-            windowDateKeys.push(d.toISOString().split('T')[0]);
+            windowDateKeys.push(toLocalDateKey(d));
         }
 
         const adminLogs = await AdminLoginLog.find({
@@ -1187,8 +1202,8 @@ exports.getDailySummary = async (req, res) => {
                 siteNames = exp.workLocation;
             }
 
-            // Sum credit/debit from ledger for this expense's referenceId
-            const expLedgers = ledgers.filter(l => String(l.referenceId) === String(exp._id));
+            // Sum credit/debit from ledger for this expense's referenceId specifically for THIS employee
+            const expLedgers = ledgers.filter(l => String(l.referenceId) === String(exp._id) && String(l.employee?._id || l.employee) === empId);
             const totalDebit = expLedgers.filter(l => l.type === 'Debit').reduce((s, l) => s + l.amount, 0);
             const totalCredit = expLedgers.filter(l => l.type === 'Credit').reduce((s, l) => s + l.amount, 0);
 
@@ -1214,23 +1229,55 @@ exports.getDailySummary = async (req, res) => {
                 notes: exp.notes || ''
             };
 
+            const hasReport = Boolean(
+                (exp.clientSites || []).some(cs => (cs.files?.dailyReports && cs.files.dailyReports.length > 0) || (cs.dailyReports && cs.dailyReports.length > 0)) ||
+                (exp.dailyReports && exp.dailyReports.length > 0)
+            );
+            const hasDataFile = Boolean(
+                (exp.clientSites || []).some(cs => (cs.files?.data && cs.files.data.length > 0) || (cs.dataFiles && cs.dataFiles.length > 0)) ||
+                (exp.dataFiles && exp.dataFiles.length > 0)
+            );
+
+            // Target date: If expense is linked to a schedule, use that schedule's scheduled date
+            let effectiveDate = exp.date;
+            const schedWithDate = (exp.clientSites || []).find(cs => cs.scheduleId && (cs.scheduleId.scheduleDate || cs.scheduleId.date));
+            if (schedWithDate) {
+                effectiveDate = schedWithDate.scheduleId.scheduleDate || schedWithDate.scheduleId.date;
+            }
+
             empMap[empId].entries.push({
-                date: exp.date,
+                date: effectiveDate,
                 attendance: exp.attendance || 'Present',
                 attendanceRemark: cleanRemark,
                 siteNames,
+                workLocation: exp.workLocation || '',
                 totalExpense: exp.totalExpense || 0,
                 totalDebit,
                 totalCredit,
                 category: 'Expense',
+                hasReport,
+                hasDataFile,
+                clientSites: exp.clientSites || [],
+                files: {
+                    dailyReports: exp.dailyReports || [],
+                    data: exp.dataFiles || [],
+                    photos: exp.photos || []
+                },
                 details
             });
         });
 
-        // Inject Transfer ledger entries that don't belong to any expense
-        const expenseRefIds = new Set(expenses.map(e => String(e._id)));
+        // Inject Transfer ledger entries that don't belong to any expense for this employee
+        const expenseHandledLedgerIds = new Set(
+            expenses.flatMap(exp => {
+                const expEmpId = String(exp.employeeId?._id || exp.employeeId);
+                return ledgers
+                    .filter(l => String(l.referenceId) === String(exp._id) && String(l.employee?._id || l.employee) === expEmpId)
+                    .map(l => String(l._id));
+            })
+        );
         ledgers.forEach(l => {
-            if (l.category === 'Transfer' && !expenseRefIds.has(String(l.referenceId))) {
+            if (l.category === 'Transfer' && !expenseHandledLedgerIds.has(String(l._id))) {
                 // Skip deactivated employees in ledger-only entries too
                 const lEmpStatus = universalNameMap[String(l.employee?._id || l.employee)]?.status;
                 if (lEmpStatus === 'Deactive') return;
@@ -1305,7 +1352,7 @@ exports.getDailySummary = async (req, res) => {
             if (!log.userId || !log.dateStr) return;
             const matchingEmps = activeEmployeesList.filter(e => empIdToMatchedUserMap[String(e._id)] === String(log.userId));
             matchingEmps.forEach(empDoc => {
-                const empCreatedDateStr = empDoc.createdAt ? new Date(empDoc.createdAt).toISOString().split('T')[0] : '2000-01-01';
+                const empCreatedDateStr = empDoc.createdAt ? toLocalDateKey(empDoc.createdAt) : '2000-01-01';
                 if (log.dateStr < empCreatedDateStr) return; // Do not inject logins before employee creation date
                 const empId = String(empDoc._id);
                 if (!empMap[empId]) {
@@ -1339,14 +1386,30 @@ exports.getDailySummary = async (req, res) => {
         const result = Object.values(empMap).map(emp => {
             const dateGrouped = {};
             emp.entries.forEach(entry => {
-                const dateKey = new Date(entry.date).toISOString().split('T')[0];
+                const dateKey = toLocalDateKey(entry.date);
                 if (!dateGrouped[dateKey]) {
-                    dateGrouped[dateKey] = { ...entry };
+                    dateGrouped[dateKey] = { 
+                        ...entry,
+                        date: new Date(`${dateKey}T12:00:00.000Z`)
+                    };
                     if (entry.details) {
                         dateGrouped[dateKey].details = { ...entry.details };
                     }
                 } else {
                     const existing = dateGrouped[dateKey];
+                    if (entry.hasReport) existing.hasReport = true;
+                    if (entry.hasDataFile) existing.hasDataFile = true;
+                    if (entry.workLocation) existing.workLocation = entry.workLocation;
+                    if (Array.isArray(entry.clientSites) && entry.clientSites.length > 0) {
+                        existing.clientSites = [...(existing.clientSites || []), ...entry.clientSites];
+                    }
+                    if (entry.files) {
+                        existing.files = {
+                            dailyReports: [...(existing.files?.dailyReports || []), ...(entry.files?.dailyReports || [])],
+                            data: [...(existing.files?.data || []), ...(entry.files?.data || [])],
+                            photos: [...(existing.files?.photos || []), ...(entry.files?.photos || [])]
+                        };
+                    }
                     existing.totalDebit = (existing.totalDebit || 0) + (entry.totalDebit || 0);
                     existing.totalCredit = (existing.totalCredit || 0) + (entry.totalCredit || 0);
                     existing.totalExpense = (existing.totalExpense || 0) + (entry.totalExpense || 0);
