@@ -1,3 +1,4 @@
+const { getSiteMasterPath } = require('../utils/pathHelper');
 const express = require('express');
 const router = express.Router();
 const multer = require('multer');
@@ -69,27 +70,19 @@ const storage = multer.diskStorage({
             clientShortId = clientShortId || 'unknown_client';
             siteSubfolder = siteSubfolder || 'unknown_site';
 
-            let targetDir;
-            if (useNas) {
-                targetDir = path.join(nasBase, 'client_master', clientShortId, 'site_master', siteSubfolder);
-            } else {
-                const absoluteLocalBase = path.isAbsolute(localBase) ? localBase : path.join(process.cwd(), localBase);
-                targetDir = path.join(absoluteLocalBase, 'client_master', clientShortId, 'site_master', siteSubfolder);
-            }
-
-            if (!fs.existsSync(targetDir)) fs.mkdirSync(targetDir, { recursive: true });
-
+            const rootBase = useNas ? nasBase : (path.isAbsolute(localBase) ? localBase : path.join(process.cwd(), localBase));
+            
             let sub = 'data'; 
             if (file.fieldname === 'photos') sub = 'photos';
             else if (file.fieldname === 'dailyReports') sub = 'Daily_report';
             else if (['collectedFiles', 'convertedFiles', 'liningDrawFiles', 'esurveyWorkFiles', 'finalCheckingFiles'].includes(file.fieldname)) {
-                sub = 'drawing'; // save in drawing directory
+                sub = 'drawing';
             }
             else if (file.fieldname === 'mailFiles') {
-                sub = 'Mail'; // save in Mail directory
+                sub = 'Mail';
             }
 
-            const subPath = path.join(targetDir, sub);
+            const subPath = getSiteMasterPath(rootBase, clientShortId, siteSubfolder, sub);
             if (!fs.existsSync(subPath)) fs.mkdirSync(subPath, { recursive: true });
 
             file.destination = subPath;
