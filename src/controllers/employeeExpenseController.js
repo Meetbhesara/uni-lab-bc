@@ -1046,6 +1046,7 @@ exports.getAttendanceByDate = async (req, res) => {
 };
 
 // ── POST: Bulk upsert attendance for unscheduled employees (no money touched) ──
+// ── GET: 5 Days Daily Summary Report ──
 exports.getDailySummary = async (req, res) => {
     try {
         const toLocalDateKey = (d) => {
@@ -1066,20 +1067,44 @@ exports.getDailySummary = async (req, res) => {
         fiveDaysAgo.setDate(fiveDaysAgo.getDate() - 4);
         fiveDaysAgo.setHours(0, 0, 0, 0);
 
-        // ── Fetch all schedules in the last-5-days window ──────────────────────
+        // Generate dateStr keys for the 5-day window
+        const windowDateKeys = [];
+        for (let d = new Date(fiveDaysAgo); d <= today; d.setDate(d.getDate() + 1)) {
+            windowDateKeys.push(toLocalDateKey(d));
+        }
+
         const ScheduleMaster = require('../models/ScheduleMaster');
-        const schedules = await ScheduleMaster.find({
-            scheduleDate: { $gte: fiveDaysAgo, $lte: today },
-            dayStatus: { $nin: ['Rejected'] }
-        })
-            .populate('operative', 'name status')
-            .populate('helpers', 'name status')
-            .populate('site', 'siteName')
-            .populate('client', 'clientName')
-            .lean();
+        const EmployeeMaster = require('../models/EmployeeMaster');
+        const MoneyTransferAccount = require('../models/MoneyTransferAccount');
+        const EmployeeLedger = require('../models/EmployeeLedger');
+        const User = require('../models/User');
+        const AdminLoginLog = require('../models/AdminLoginLog');
+
+        // Parallelize primary queries
+        const [schedules, empsList, customAccsList, ledgers, allUsers, adminLogs] = await Promise.all([
+            ScheduleMaster.find({
+                scheduleDate: { $gte: fiveDaysAgo, $lte: today },
+                dayStatus: { $nin: ['Rejected'] }
+            })
+                .populate('operative', 'name status')
+                .populate('helpers', 'name status')
+                .populate('site', 'siteName')
+                .populate('client', 'clientName')
+                .lean(),
+            EmployeeMaster.find({}, '_id name email totalAmount foodAllowance status createdAt').lean(),
+            MoneyTransferAccount.find({}, '_id name').lean(),
+            EmployeeLedger.find({
+                date: { $gte: fiveDaysAgo, $lte: today }
+            }).sort({ date: -1 }).lean(),
+            User.find().select('_id name email isAdmin isSuperAdmin').lean(),
+            AdminLoginLog.find({
+                dateStr: { $in: windowDateKeys }
+            }).lean()
+        ]);
 
         const schedIdsInWindow = schedules.map(s => s._id);
 
+        // Query expenses in window
         const expenses = await EmployeeExpense.find({
             $or: [
                 { date: { $gte: fiveDaysAgo, $lte: today } },
@@ -1095,8 +1120,7 @@ exports.getDailySummary = async (req, res) => {
             .sort({ 'employeeId': 1, date: -1 })
             .lean();
 
-        // Build a map: "empId|YYYY-MM-DD" → { empName, siteName } for scheduled-only entries
-        // We will use this after building empMap from expenses to fill any gaps.
+        // Build scheduledPresenceMap
         const scheduledPresenceMap = {}; // key: `${empId}|${dateKey}`
         schedules.forEach(s => {
             const dateKey = toLocalDateKey(s.scheduleDate);
@@ -1114,35 +1138,22 @@ exports.getDailySummary = async (req, res) => {
             if (s.operative) addEntry(s.operative);
             (s.helpers || []).forEach(h => addEntry(h));
         });
-        // ───────────────────────────────────────────────────────────────────────
 
-        // Build universal name map from both EmployeeMaster and MoneyTransferAccount
-        const EmployeeMaster = require('../models/EmployeeMaster');
-        const MoneyTransferAccount = require('../models/MoneyTransferAccount');
-        const empsList = await EmployeeMaster.find({}, 'name totalAmount foodAllowance status').lean();
-        const customAccsList = await MoneyTransferAccount.find({}, 'name').lean();
+        // Universal name map & Active employees list
         const universalNameMap = {};
-        empsList.forEach(e => universalNameMap[String(e._id)] = { _id: e._id, name: e.name, status: e.status });
-        customAccsList.forEach(c => universalNameMap[String(c._id)] = { _id: c._id, name: `${c.name} (BANK)`, isBank: true });
+        const activeEmployeesList = [];
+        empsList.forEach(e => {
+            const idStr = String(e._id);
+            universalNameMap[idStr] = { _id: e._id, name: e.name, status: e.status };
+            if (e.status !== 'Deactive') {
+                activeEmployeesList.push(e);
+            }
+        });
+        customAccsList.forEach(c => {
+            universalNameMap[String(c._id)] = { _id: c._id, name: `${c.name} (BANK)`, isBank: true };
+        });
 
-        // Also fetch ledger entries for the same period (credit & debit) without populating employee/relatedEmployee to preserve non-EmployeeMaster IDs
-        const EmployeeLedger = require('../models/EmployeeLedger');
-        const ledgers = await EmployeeLedger.find({
-            date: { $gte: fiveDaysAgo, $lte: today }
-        })
-            .sort({ date: -1 })
-            .lean();
-
-        // Group expenses by employee — skip deactivated employees entirely
-        // ── Employee and Admin Report Synchronization Prep ──────────────────
-        const User = require('../models/User');
-        const AdminLoginLog = require('../models/AdminLoginLog');
-
-        const activeEmployeesList = await EmployeeMaster.find({ status: { $ne: 'Deactive' } })
-            .select('_id name email status createdAt')
-            .lean();
-
-        const allUsers = await User.find().select('_id name email isAdmin isSuperAdmin').lean();
+        // Map Employee ID -> Matched Admin User ID
         const userEmailMap = {};
         allUsers.forEach(u => {
             if (u.email && typeof u.email === 'string' && u.email.trim().length > 3) {
@@ -1150,7 +1161,6 @@ exports.getDailySummary = async (req, res) => {
             }
         });
 
-        // Map Employee ID -> Matched Admin User ID based on case-insensitive email strictly (ignore phone)
         const empIdToMatchedUserMap = {};
         activeEmployeesList.forEach(emp => {
             const empEmail = (emp.email && typeof emp.email === 'string') ? emp.email.toLowerCase().trim() : '';
@@ -1160,25 +1170,28 @@ exports.getDailySummary = async (req, res) => {
             }
         });
 
-        // Generate dateStr keys for the 5-day window
-        const windowDateKeys = [];
-        for (let d = new Date(fiveDaysAgo); d <= today; d.setDate(d.getDate() + 1)) {
-            windowDateKeys.push(toLocalDateKey(d));
-        }
-
-        const adminLogs = await AdminLoginLog.find({
-            dateStr: { $in: windowDateKeys }
-        }).lean();
-
+        // Admin login lookup
         const adminLoginLookup = new Set(); // key: `${userId}|${dateStr}`
         adminLogs.forEach(log => {
             if (log.userId && log.dateStr) {
                 adminLoginLookup.add(`${String(log.userId)}|${log.dateStr}`);
             }
         });
-        // ──────────────────────────────────────────────────────────────────
+
+        // Index ledgers by `${referenceId}|${employeeId}` for O(1) matching
+        const ledgersByRefAndEmp = new Map();
+        ledgers.forEach(l => {
+            if (l.referenceId) {
+                const empId = String(l.employee?._id || l.employee || '');
+                const key = `${String(l.referenceId)}|${empId}`;
+                if (!ledgersByRefAndEmp.has(key)) ledgersByRefAndEmp.set(key, []);
+                ledgersByRefAndEmp.get(key).push(l);
+            }
+        });
 
         const empMap = {};
+        const expenseHandledLedgerIds = new Set();
+
         expenses.forEach(exp => {
             // Skip if employee is deactivated
             const empStatus = exp.employeeId?.status || universalNameMap[String(exp.employeeId?._id || exp.employeeId)]?.status;
@@ -1191,6 +1204,7 @@ exports.getDailySummary = async (req, res) => {
             } else if (!empMap[empId].matchedUserId) {
                 empMap[empId].matchedUserId = empIdToMatchedUserMap[empId] || null;
             }
+
             // Get site names
             let siteNames = (exp.clientSites || [])
                 .map(cs => cs.siteId?.siteName || cs.siteId || '')
@@ -1202,10 +1216,16 @@ exports.getDailySummary = async (req, res) => {
                 siteNames = exp.workLocation;
             }
 
-            // Sum credit/debit from ledger for this expense's referenceId specifically for THIS employee
-            const expLedgers = ledgers.filter(l => String(l.referenceId) === String(exp._id) && String(l.employee?._id || l.employee) === empId);
-            const totalDebit = expLedgers.filter(l => l.type === 'Debit').reduce((s, l) => s + l.amount, 0);
-            const totalCredit = expLedgers.filter(l => l.type === 'Credit').reduce((s, l) => s + l.amount, 0);
+            // Sum credit/debit from ledger using Map O(1) lookup
+            const expLedgers = ledgersByRefAndEmp.get(`${String(exp._id)}|${empId}`) || [];
+            expLedgers.forEach(l => expenseHandledLedgerIds.add(String(l._id)));
+
+            let totalDebit = 0;
+            let totalCredit = 0;
+            expLedgers.forEach(l => {
+                if (l.type === 'Debit') totalDebit += (l.amount || 0);
+                else if (l.type === 'Credit') totalCredit += (l.amount || 0);
+            });
 
             const rawRemark = exp.attendanceRemark || '';
             const cleanRemark = rawRemark.toLowerCase().includes('auto-marked') || rawRemark.toLowerCase().includes('auto marked') ? '' : rawRemark;
@@ -1268,14 +1288,6 @@ exports.getDailySummary = async (req, res) => {
         });
 
         // Inject Transfer ledger entries that don't belong to any expense for this employee
-        const expenseHandledLedgerIds = new Set(
-            expenses.flatMap(exp => {
-                const expEmpId = String(exp.employeeId?._id || exp.employeeId);
-                return ledgers
-                    .filter(l => String(l.referenceId) === String(exp._id) && String(l.employee?._id || l.employee) === expEmpId)
-                    .map(l => String(l._id));
-            })
-        );
         ledgers.forEach(l => {
             if (l.category === 'Transfer' && !expenseHandledLedgerIds.has(String(l._id))) {
                 // Skip deactivated employees in ledger-only entries too
@@ -1322,7 +1334,7 @@ exports.getDailySummary = async (req, res) => {
             }
         });
 
-        // ── Always inject a schedule-based Present entry for every allocation ──
+        // Always inject a schedule-based Present entry for every allocation
         Object.values(scheduledPresenceMap).forEach(({ empId, empName, siteName, date: schedDate }) => {
             if (!empMap[empId]) {
                 empMap[empId] = { empId, empName, matchedUserId: empIdToMatchedUserMap[empId] || null, entries: [] };
@@ -1345,9 +1357,8 @@ exports.getDailySummary = async (req, res) => {
                 }
             });
         });
-        // ──────────────────────────────────────────────────────────────────────
 
-        // ── Inject AdminLoginLog entries for matched employees ──────────────
+        // Inject AdminLoginLog entries for matched employees
         adminLogs.forEach(log => {
             if (!log.userId || !log.dateStr) return;
             const matchingEmps = activeEmployeesList.filter(e => empIdToMatchedUserMap[String(e._id)] === String(log.userId));
@@ -1364,7 +1375,7 @@ exports.getDailySummary = async (req, res) => {
                     };
                 }
                 empMap[empId].entries.push({
-                    date: new Date(`${log.dateStr}T12:00:00Z`),
+                    date: new Date(`${log.dateStr}T12:00:00.000Z`),
                     attendance: 'Present',
                     attendanceRemark: 'Admin Portal Login',
                     siteNames: 'Admin Office / Login',
@@ -1380,7 +1391,6 @@ exports.getDailySummary = async (req, res) => {
                 });
             });
         });
-        // ────────────────────────────────────────────────────────────────────
 
         // Consolidate entries by date so there are no duplicate dates per employee
         const result = Object.values(empMap).map(emp => {
@@ -1456,7 +1466,7 @@ exports.getDailySummary = async (req, res) => {
                 }
             });
 
-            // ── Apply Employee and Admin Report Synchronization ─────────────
+            // Apply Employee and Admin Report Synchronization
             Object.keys(dateGrouped).forEach(dateKey => {
                 const existing = dateGrouped[dateKey];
                 const hasSchedule = Boolean(scheduledPresenceMap[`${emp.empId}|${dateKey}`]);
@@ -1470,14 +1480,11 @@ exports.getDailySummary = async (req, res) => {
                             existing.siteNames = 'Admin Office / Login';
                         }
                     } else if (hasSchedule) {
-                        // Mark as Present if scheduled report/task exists, even if no admin login or report entry
                         existing.attendance = 'Present';
                         if (!existing.siteNames || existing.siteNames === '-' || existing.siteNames === '—') {
                             existing.siteNames = scheduledPresenceMap[`${emp.empId}|${dateKey}`].siteName || 'Scheduled Duty';
                         }
                     } else {
-                        // Admin Report says Absent (no admin login) and no schedule.
-                        // ONLY force Absent if there is no manual attendance recorded (like Unscheduled Present).
                         if (existing.attendance !== 'Present' && existing.attendance !== 'Half Day') {
                             existing.attendance = 'Absent';
                             if (!existing.attendanceRemark) {
@@ -1486,9 +1493,7 @@ exports.getDailySummary = async (req, res) => {
                         }
                     }
                 } else {
-                    // Regular employees without matching Admin account
                     if (hasSchedule) {
-                        // Mark as Present if scheduled report/task exists, even if no separate employee report entry
                         existing.attendance = 'Present';
                         if (!existing.siteNames || existing.siteNames === '-' || existing.siteNames === '—') {
                             existing.siteNames = scheduledPresenceMap[`${emp.empId}|${dateKey}`].siteName || 'Scheduled Duty';
@@ -1496,7 +1501,6 @@ exports.getDailySummary = async (req, res) => {
                     }
                 }
             });
-            // ────────────────────────────────────────────────────────────────
 
             return {
                 ...emp,
@@ -1506,7 +1510,7 @@ exports.getDailySummary = async (req, res) => {
             };
         }).sort((a, b) => a.empName.localeCompare(b.empName));
 
-        res.json({ success: true, data: result });
+        res.json({ success: true, data: result, schedules });
     } catch (error) {
         console.error('getDailySummary Error:', error);
         res.status(500).json({ success: false, message: error.message });
