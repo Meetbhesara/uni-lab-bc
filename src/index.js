@@ -172,6 +172,26 @@ app.use('/api/uploads/products', exprees.static(productsUploadPath));
 app.use('/uploads/invoice', exprees.static(invoiceUploadPath));
 app.use('/api/uploads/invoice', exprees.static(invoiceUploadPath));
 
+
+// Universal Case-Insensitive Static File Fallback
+const { resolveCaseInsensitiveFile } = require('./utils/pathHelper');
+const serveCaseInsensitiveUploads = (req, res, next) => {
+    if (req.method !== 'GET' && req.method !== 'HEAD') return next();
+    
+    const rootBase = (process.env.USE_NAS === 'true') 
+        ? (process.env.NAS_BASE_PATH || '/app/storage') 
+        : (process.env.LOCAL_BASE_PATH ? (path.isAbsolute(process.env.LOCAL_BASE_PATH) ? process.env.LOCAL_BASE_PATH : path.join(process.cwd(), process.env.LOCAL_BASE_PATH)) : path.join(process.cwd(), 'uploads'));
+
+    const resolved = resolveCaseInsensitiveFile(rootBase, req.path);
+    if (resolved) {
+        return res.sendFile(resolved);
+    }
+    next();
+};
+
+app.use('/uploads', serveCaseInsensitiveUploads);
+app.use('/api/uploads', serveCaseInsensitiveUploads);
+
 // Generic Fallback for other uploads (like Quotation PDFs in local folder)
 app.use('/uploads', exprees.static('uploads'));
 app.use('/api/uploads', exprees.static('uploads'));

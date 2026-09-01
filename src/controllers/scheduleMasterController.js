@@ -82,7 +82,29 @@ const createSchedule = async (req, res) => {
             scheduleType: scheduleType || 'VISIT'
         });
 
+        
         await schedule.save();
+
+        // Apply mail files to other schedules in same site if applyToAll
+        if (req.body.applyToAll === 'true' && req.files && req.files.mailFiles && schedule.site) {
+            try {
+                const ScheduleMaster = require('../models/ScheduleMaster');
+                const otherSchedules = await ScheduleMaster.find({
+                    _id: { $ne: schedule._id },
+                    site: schedule.site
+                });
+
+                for (const otherSched of otherSchedules) {
+                    otherSched.draftingWorkFiles = otherSched.draftingWorkFiles || {};
+                    otherSched.draftingWorkFiles.mailFiles = schedule.draftingWorkFiles.mailFiles;
+                    await otherSched.save();
+                }
+                console.log(`✅ Applied mail files to ${otherSchedules.length} other schedules for site.`);
+            } catch (applyErr) {
+                console.error('Error in applyToAll mailFiles:', applyErr);
+            }
+        }
+
 
         // Apply to all schedules in the group if applyToAll is true
         if (req.body.applyToAll === 'true' && req.files && req.files['mailFiles']) {
