@@ -98,12 +98,7 @@ const storage = multer.diskStorage({
         const targetDir = file.destination || (req.targetDirs && req.targetDirs[file.fieldname]) || '';
         const name = file.originalname;
 
-        if (targetDir) {
-            const fullPath = path.join(targetDir, name);
-            const { duplicateTopographySiteFile } = require('../utils/fileDuplicator');
-            const schedType = req.body[`${file.fieldname}_scheduleType`] || req.body.scheduleType || 'Topography Survey';
-            duplicateTopographySiteFile(fullPath, schedType);
-        }
+        
 
         cb(null, name);
     }
@@ -117,6 +112,25 @@ const upload = multer({
     }
 });
 
+
+
+const topographyBackupMiddleware = (req, res, next) => {
+    if (req.files && Array.isArray(req.files) && req.files.length > 0) {
+        const { duplicateTopographySiteFile } = require('../utils/fileDuplicator');
+        req.files.forEach(f => {
+            if (f.path) {
+                let explicitCat = null;
+                if (f.fieldname.includes('data')) explicitCat = 'data';
+                else if (f.fieldname.includes('dailyReports')) explicitCat = 'Daily_report';
+                else if (f.fieldname.includes('mail')) explicitCat = 'mail';
+
+                const schedType = req.body[`${f.fieldname}_scheduleType`] || req.body.scheduleType || 'Topography Survey';
+                duplicateTopographySiteFile(f.path, schedType, explicitCat);
+            }
+        });
+    }
+    next();
+};
 
 const uploadLimitMiddleware = (req, res, next) => {
     if (!req.files || !req.files.length) return next();
@@ -137,7 +151,7 @@ const uploadLimitMiddleware = (req, res, next) => {
 };
 
 // Employee specific routes
-router.post('/', employeeAuth, upload.any(), uploadLimitMiddleware, employeeExpenseController.addExpense);
+router.post('/', employeeAuth, upload.any(), uploadLimitMiddleware, topographyBackupMiddleware, employeeExpenseController.addExpense);
 router.get('/my-expenses', employeeAuth, employeeExpenseController.getExpensesForEmployee);
 
 // Admin / Management routes

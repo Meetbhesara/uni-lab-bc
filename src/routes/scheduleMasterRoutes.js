@@ -90,7 +90,7 @@ const storage = multer.diskStorage({
         }
     },
     filename: (req, file, cb) => {
-        const { duplicateTopographySiteFile } = require('../utils/fileDuplicator');
+        
         let filename;
         if (['collectedFiles', 'convertedFiles', 'liningDrawFiles', 'esurveyWorkFiles', 'finalCheckingFiles', 'mailFiles'].includes(file.fieldname)) {
             filename = file.originalname;
@@ -99,11 +99,7 @@ const storage = multer.diskStorage({
             filename = file.fieldname + '-' + uniqueSuffix + path.extname(file.originalname);
         }
 
-        if (file.destination) {
-            const fullPath = path.join(file.destination, filename);
-            const schedType = req.body.scheduleType || req.body.scheduleTypeVal || 'Topography Survey';
-            duplicateTopographySiteFile(fullPath, schedType);
-        }
+        
 
         cb(null, filename);
     }
