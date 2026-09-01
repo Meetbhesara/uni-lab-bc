@@ -1427,10 +1427,15 @@ const uploadDraftingWorkFiles = async (req, res) => {
                     duplicateTopographySiteFile(f.path, schedule.scheduleType);
                 });
                 const docs = req.files[cat].map(f => {
-                    let fileUrl = `/uploads/${path.basename(f.path)}`;
-                    if (clientShortId && siteSubfolder) {
+                    const normPath = f.path.replace(/\\/g, '/');
+                    let fileUrl = '';
+                    if (normPath.includes('/client_master/')) {
+                        fileUrl = '/uploads' + normPath.substring(normPath.indexOf('/client_master/'));
+                    } else if (normPath.includes('/uploads/')) {
+                        fileUrl = normPath.substring(normPath.indexOf('/uploads/'));
+                    } else {
                         const folderName = cat === 'mailFiles' ? 'Mail' : 'drawing';
-                        fileUrl = `/uploads/client_master/${clientShortId}/site_master/${siteSubfolder}/${folderName}/${path.basename(f.path)}`;
+                        fileUrl = `/uploads/client_master/${clientShortId || 'unknown_client'}/site_master/${siteSubfolder || 'unknown_site'}/${folderName}/${path.basename(f.path)}`;
                     }
                     const docObj = {
                         name: f.originalname,
@@ -1569,16 +1574,56 @@ const updateDraftingWorkFileStatus = async (req, res) => {
 const deleteDraftingWorkFile = async (req, res) => {
     try {
         const { id, category, fileId } = req.params;
+        const { applyToAll, fileUrl } = req.query;
         const schedule = await ScheduleMaster.findById(id);
         if (!schedule) return res.status(404).json({ success: false, message: 'Schedule not found' });
 
+        let targetFile = null;
+
         if (schedule.draftingWorkFiles && schedule.draftingWorkFiles[category]) {
-            schedule.draftingWorkFiles[category] = schedule.draftingWorkFiles[category].filter(f => f._id.toString() !== fileId);
+            targetFile = schedule.draftingWorkFiles[category].find(
+                f => (f._id && f._id.toString() === fileId) || f.name === fileId || f.url === fileId || (fileUrl && f.url === fileUrl)
+            );
+
+            // Remove from current schedule in DB
+            schedule.draftingWorkFiles[category] = schedule.draftingWorkFiles[category].filter(
+                f => (f._id && f._id.toString() !== fileId) && f.name !== fileId && f.url !== fileId && (!fileUrl || f.url !== fileUrl)
+            );
             await schedule.save();
         }
 
-        res.json({ success: true, message: 'Drafting file deleted successfully', data: schedule.draftingWorkFiles });
+        // If it's a mail file or applyToAll is set, also remove from other schedules of the same site in DB
+        if (category === 'mailFiles' || applyToAll === 'true') {
+            try {
+                const targetUrl = targetFile?.url || fileUrl;
+                const targetName = targetFile?.name || (fileId.includes('.') ? fileId : null);
+                if (targetUrl || targetName) {
+                    const otherSchedules = await ScheduleMaster.find({
+                        _id: { $ne: schedule._id },
+                        site: schedule.site,
+                        'draftingWorkFiles.mailFiles': { $exists: true, $ne: [] }
+                    });
+
+                    for (const otherSched of otherSchedules) {
+                        if (otherSched.draftingWorkFiles && otherSched.draftingWorkFiles.mailFiles) {
+                            const originalLen = otherSched.draftingWorkFiles.mailFiles.length;
+                            otherSched.draftingWorkFiles.mailFiles = otherSched.draftingWorkFiles.mailFiles.filter(
+                                f => (!targetUrl || f.url !== targetUrl) && (!targetName || f.name !== targetName)
+                            );
+                            if (otherSched.draftingWorkFiles.mailFiles.length !== originalLen) {
+                                await otherSched.save();
+                            }
+                        }
+                    }
+                }
+            } catch (groupDelErr) {
+                console.error('Error removing group mail from other schedules in DB:', groupDelErr);
+            }
+        }
+
+        res.json({ success: true, message: 'Drafting file removed from database successfully', data: schedule.draftingWorkFiles });
     } catch (error) {
+        console.error('Error in deleteDraftingWorkFile:', error);
         res.status(500).json({ success: false, message: error.message });
     }
 };

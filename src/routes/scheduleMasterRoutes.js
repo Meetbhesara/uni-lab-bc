@@ -34,11 +34,11 @@ const storage = multer.diskStorage({
 
         try {
             // We expect clientId (short ID) and siteSubfolder in req.body
-            let clientShortId = (req.body.clientShortId || 'unknown_client').toLowerCase();
-            let siteSubfolder = (req.body.siteSubfolder || 'unknown_site').toLowerCase();
+            let clientShortId = req.body.clientShortId || '';
+            let siteSubfolder = req.body.siteSubfolder || '';
 
-            // Attempt to resolve from DB using req.params.id (schedule ID)
-            if (req.params && req.params.id) {
+            // Attempt to resolve from DB using req.params.id (schedule ID) if not provided
+            if (req.params && req.params.id && (!clientShortId || !siteSubfolder)) {
                 try {
                     const ScheduleMaster = require('../models/ScheduleMaster');
                     const ClientMaster = require('../models/ClientMaster');
@@ -46,19 +46,28 @@ const storage = multer.diskStorage({
                     
                     const sched = await ScheduleMaster.findById(req.params.id);
                     if (sched) {
-                        const clientData = await ClientMaster.findById(sched.client);
-                        if (clientData && clientData.clientId) {
-                            clientShortId = clientData.clientId.toLowerCase();
+                        if (!clientShortId) {
+                            const clientData = await ClientMaster.findById(sched.client);
+                            if (clientData && clientData.clientId) {
+                                clientShortId = clientData.clientId;
+                            }
                         }
-                        const siteData = await SiteMaster.findById(sched.site);
-                        if (siteData && siteData.siteName) {
-                            siteSubfolder = siteData.siteName.trim().replace(/[<>:"\/\\|?*]+/g, '_');
+                        if (!siteSubfolder) {
+                            const siteData = await SiteMaster.findById(sched.site);
+                            if (siteData) {
+                                const siteIdPart = siteData.siteId || '0000';
+                                const siteNamePart = (siteData.siteName || 'unknown_site').trim().replace(/[<>:"/\\|?*]+/g, '_');
+                                siteSubfolder = `${siteIdPart}-${siteNamePart}`;
+                            }
                         }
                     }
                 } catch (dbErr) {
                     console.error('Error fetching schedule details for multer:', dbErr);
                 }
             }
+
+            clientShortId = clientShortId || 'unknown_client';
+            siteSubfolder = siteSubfolder || 'unknown_site';
 
             let targetDir;
             if (useNas) {
