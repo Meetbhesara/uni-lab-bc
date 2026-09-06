@@ -179,7 +179,48 @@ router.post('/send-multiple-products', auth, async (req, res) => {
             if (updated) await user.save();
         }
 
-        // 2. Create WhatsApp Enquiry Log (type: 'whatsapp')
+        // ── CORRECTED FLOW: Send first → Log only if successful ──
+        const delay = ms => new Promise(resolve => setTimeout(resolve, ms));
+        let sendError = null;
+
+        // 2. SEND WhatsApp Messages FIRST (before any DB write)
+        console.log('[WhatsApp] Sending messages to ' + phone + ' (' + (products.length) + ' products)');
+        try {
+            const introMsg = `Hello ${contactPersonName || companyName || 'there'},\n\nHere are the products you requested from Unique Engineering:\n\n`;
+            await sendWhatsapp(phone, introMsg, null);
+
+            for (const prod of products) {
+                await delay(1500); // 1.5s delay to avoid rate limits / out-of-order delivery
+
+                const caption = `🚀 *${prod.name?.toUpperCase()}*\n\n` +
+                                `📦 *Category:* ${prod.category || 'General'}\n\n` +
+                                `📝 *Description:*\n${prod.description || 'No description provided'}\n\n` +
+                                `🌐 *View on Website:* https://uniquenas.tail57739c.ts.net/product/${prod._id}`;
+
+                const imgPath = prod.localImages?.[0] || prod.images?.[0] || prod.photos?.[0];
+
+                if (imgPath) {
+                    try {
+                        await sendWhatsappMedia(phone, imgPath, caption, null);
+                    } catch (mediaErr) {
+                        console.warn('[WhatsApp] Media failed, falling back to text:', mediaErr.message);
+                        await sendWhatsapp(phone, caption, null);
+                    }
+                } else {
+                    await sendWhatsapp(phone, caption, null);
+                }
+            }
+
+            await delay(1000);
+            await sendWhatsapp(phone, `Please let us know if you have any questions or would like a formal quotation.\n\nThank you!`, null);
+            console.log('[WhatsApp] All messages sent successfully to ' + phone);
+        } catch (whatsappErr) {
+            sendError = whatsappErr.message || 'WhatsApp send failed';
+            console.error('[WhatsApp] Send failed for ' + phone + ':', sendError);
+            return res.status(500).json({ success: false, error: sendError });
+        }
+
+        // 3. ONLY AFTER SUCCESSFUL SEND → Create the WhatsApp log entry in DB
         const enquiryProducts = products.map(p => ({
             productId: p._id || p.id,
             quantity: 1,
@@ -187,7 +228,7 @@ router.post('/send-multiple-products', auth, async (req, res) => {
         }));
 
         const defaultFollowUp = new Date();
-        defaultFollowUp.setDate(defaultFollowUp.getDate() + 2); // default 2 days
+        defaultFollowUp.setDate(defaultFollowUp.getDate() + 2);
 
         const enquiry = new Enquiry({
             Name: companyName || contactPersonName || 'Guest',
@@ -198,44 +239,14 @@ router.post('/send-multiple-products', auth, async (req, res) => {
             products: enquiryProducts,
             type: 'whatsapp',
             status: 'Pending',
-            isSeen: true, // Auto-seen since it's an outbound log
+            isSeen: true,
             firstFollowUpDate: defaultFollowUp,
-            nextFollowUp: defaultFollowUp
+            nextFollowUp: defaultFollowUp,
+            whatsappStatus: 'sent',
+            whatsappSentAt: new Date()
         });
         await enquiry.save();
-
-        // 3. Send WhatsApp Messages
-        // We will send an intro message, followed by product messages
-        let introMsg = `Hello ${contactPersonName || companyName || 'there'},\n\nHere are the products you requested from Unique Engineering:\n\n`;
-        await sendWhatsapp(phone, introMsg, null);
-
-        // Add a small delay so messages arrive in order
-        const delay = ms => new Promise(res => setTimeout(res, ms));
-
-        for (const prod of products) {
-            await delay(1500); // 1.5s delay between messages to avoid rate limit or out-of-order delivery
-
-            const caption = `🚀 *${prod.name?.toUpperCase()}*\n\n` +
-                            `📦 *Category:* ${prod.category || 'General'}\n\n` +
-                            `📝 *Description:*\n${prod.description || 'No description provided'}\n\n` +
-                            `🌐 *View on Website:* https://uniquenas.tail57739c.ts.net/product/${prod._id}`;
-
-            const imgPath = prod.localImages?.[0] || prod.images?.[0] || prod.photos?.[0];
-
-            if (imgPath) {
-                try {
-                    await sendWhatsappMedia(phone, imgPath, caption, null);
-                } catch (mediaErr) {
-                    console.error('[WhatsApp] Failed to send media, falling back to text:', mediaErr.message);
-                    await sendWhatsapp(phone, caption, null);
-                }
-            } else {
-                await sendWhatsapp(phone, caption, null);
-            }
-        }
-
-        await delay(1000);
-        await sendWhatsapp(phone, `Please let us know if you have any questions or would like a formal quotation.\n\nThank you!`, null);
+        console.log('[WhatsApp] Log entry created in DB for ' + phone + ' (enquiry ID: ' + enquiry._id + ')');
 
         res.status(200).json({ success: true, msg: 'WhatsApp products sent successfully!', enquiry });
     } catch (e) {

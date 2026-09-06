@@ -25,6 +25,9 @@ const EnquirySchema = new mongoose.Schema({
     followUps: [FollowUpSchema],
     firstFollowUpDate: { type: Date },
     nextFollowUp: { type: Date },
+    whatsappStatus: { type: String, enum: ['sent', 'failed', 'partial'], default: 'sent' },
+    whatsappSentAt: { type: Date },
+    whatsappError: { type: String },
     createdAt: { type: Date, default: Date.now }
 });
 
