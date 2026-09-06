@@ -80,7 +80,7 @@ const EmployeeExpenseSchema = new mongoose.Schema({
     },
     workLocation: {
         type: String,
-        enum: ['Home', 'Godown', 'Office', ''],
+        enum: ['Home', 'Godown', 'Office', 'Room', 'Site', ''],
         default: ''
     },
     creditDebit: {

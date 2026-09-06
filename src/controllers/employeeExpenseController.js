@@ -1088,8 +1088,10 @@ exports.getDailySummary = async (req, res) => {
             })
                 .populate('operative', 'name status')
                 .populate('helpers', 'name status')
-                .populate('site', 'siteName')
+                .populate('site', 'siteName siteAddress')
                 .populate('client', 'clientName')
+                .populate('vehicle', 'vehicleNumber vehicleName vehiclePhotos photos photo primaryPhotoUrl')
+                .populate('instruments', 'instrumentName serialNo model photo photos primaryPhotoUrl')
                 .lean(),
             EmployeeMaster.find({}, '_id name email totalAmount foodAllowance status createdAt').lean(),
             MoneyTransferAccount.find({}, '_id name').lean(),
@@ -1581,7 +1583,7 @@ exports.bulkSaveAttendance = async (req, res) => {
             if (existingExpense) {
                 existingExpense.attendance = attendance;
                 existingExpense.attendanceRemark = attendanceRemark || '';
-                if (workLocation) existingExpense.workLocation = workLocation;
+                if (workLocation !== undefined) existingExpense.workLocation = workLocation;
                 
                 existingExpense.expenses = finalExpenses;
                 existingExpense.otherExpensesList = finalOtherExpensesList;
