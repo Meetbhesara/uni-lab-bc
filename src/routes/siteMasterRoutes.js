@@ -28,6 +28,8 @@ router.get('/by-client/:clientId', async (req, res) => {
     }
 });
 
+const { getSiteMasterPath } = require('../utils/pathHelper');
+
 // Dynamic Storage Configuration
 const storage = multer.diskStorage({
     destination: async (req, file, cb) => {
@@ -35,6 +37,8 @@ const storage = multer.diskStorage({
         let nasBase = process.env.NAS_BASE_PATH || '/app/storage';
         if (useNas && !nasBase.startsWith('/')) nasBase = '/' + nasBase;
         const localBase = process.env.LOCAL_BASE_PATH || './uploads';
+        const absoluteLocalBase = path.isAbsolute(localBase) ? localBase : path.join(process.cwd(), localBase);
+        const rootBase = useNas ? nasBase : absoluteLocalBase;
 
         try {
             // Get client ObjectId and site details from request or DB if updating
@@ -58,43 +62,29 @@ const storage = multer.diskStorage({
                 const ClientMaster = require('../models/ClientMaster');
                 const clientRecord = await ClientMaster.findById(clientObjId);
                 if (clientRecord && clientRecord.clientId) {
-                    clientShortId = clientRecord.clientId.toLowerCase();
+                    clientShortId = clientRecord.clientId;
                 }
             }
 
             // Sanitize site name and combine with siteId for folder naming
             siteId = siteId || 'unknown_id';
-            const siteNamePart = (siteName || 'unknown_site').trim().replace(/[<>:"\/\\|?*]+/g, '_');
+            const siteNamePart = (siteName || 'unknown_site').trim().replace(/[<>:"/\\|?*]+/g, '_');
             const siteSubfolder = `${siteId}-${siteNamePart}`;
-
-            let targetDir;
-            if (useNas) {
-                targetDir = path.join(nasBase, 'client_master', clientShortId, 'site_master', siteSubfolder);
-            } else {
-                const absoluteLocalBase = path.isAbsolute(localBase) ? localBase : path.join(process.cwd(), localBase);
-                targetDir = path.join(absoluteLocalBase, 'client_master', clientShortId, 'site_master', siteSubfolder);
-            }
-
-            if (!fs.existsSync(targetDir)) fs.mkdirSync(targetDir, { recursive: true });
-
-            // Initialize subfolders
-            const subfolders = ['photos', 'Daily_report', 'data', 'drafting'];
-            subfolders.forEach(sub => {
-                const subPath = path.join(targetDir, sub);
-                if (!fs.existsSync(subPath)) fs.mkdirSync(subPath, { recursive: true });
-            });
 
             // Decide which subfolder to use based on the field name or documentType
             let sub = 'data'; // default
             if (file.fieldname === 'photos' || req.body.documentType === 'photos') sub = 'photos';
             else if (file.fieldname === 'dailyReports' || req.body.documentType === 'dailyReports') sub = 'Daily_report';
             else if (file.fieldname === 'data' || req.body.documentType === 'data') sub = 'data';
-            else if (file.fieldname === 'draftingWorks' || req.body.documentType === 'drafting' || req.body.documentType === 'drawing') sub = 'drafting';
+            else if (file.fieldname === 'draftingWorks' || req.body.documentType === 'drafting' || req.body.documentType === 'drawing') sub = 'drawing';
             else if (file.fieldname === 'docs') sub = ''; // Store directly in targetDir
 
-            cb(null, path.join(targetDir, sub));
+            const targetDir = getSiteMasterPath(rootBase, clientShortId, siteSubfolder, sub);
+            if (!fs.existsSync(targetDir)) fs.mkdirSync(targetDir, { recursive: true });
+
+            cb(null, targetDir);
         } catch (err) {
-            console.error('Multer destination error:', err);
+            console.error('Multer destination error in siteMasterRoutes:', err);
             cb(err);
         }
     },

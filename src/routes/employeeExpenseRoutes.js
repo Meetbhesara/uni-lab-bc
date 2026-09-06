@@ -14,36 +14,24 @@ const storage = multer.diskStorage({
     destination: async (req, file, cb) => {
         const useNas = process.env.USE_NAS === 'true';
         let nasBase = process.env.NAS_BASE_PATH || '/app/storage';
+        if (useNas && !nasBase.startsWith('/')) nasBase = '/' + nasBase;
         const localBase = process.env.LOCAL_BASE_PATH || './uploads';
+        const absoluteLocalBase = path.isAbsolute(localBase) ? localBase : path.join(process.cwd(), localBase);
+        const rootBase = useNas ? nasBase : absoluteLocalBase;
 
         try {
-            // clientShortId and siteSubfolder should be provided by frontend
-            // For site-specific files, we'll try to find the site details from the body
-            let clientShortId = (req.body.clientShortId || 'unknown_client').toLowerCase();
-            let siteSubfolder = (req.body.siteSubfolder || 'unknown_site').toLowerCase();
+            let clientShortId = req.body.clientShortId || 'unknown_client';
+            let siteSubfolder = req.body.siteSubfolder || 'unknown_site';
 
-            // If fieldname is site_X_photos, we might need to adjust destination
+            // If fieldname is site_X_photos, resolve specific metadata
             if (file.fieldname.startsWith('site_')) {
                 const parts = file.fieldname.split('_');
                 const idx = parseInt(parts[1]);
-                const clientSites = JSON.parse(req.body.clientSites || '[]');
-                
-                if (clientSites[idx]) {
-                    // We need to resolve the folder for this specific site
-                    // This is tricky because we need the site/client names which aren't in req.body.clientSites (only IDs)
-                    // But wait, the frontend should have sent metadata for all sites if we want perfection.
-                    // For now, we'll use the root targetDir if we can't resolve individual ones,
-                    // OR we'll assume the frontend sends 'site_0_folder', 'site_1_folder' etc.
-                    
-                    // Let's check if frontend sent specific metadata
-                    if (req.body[`site_${idx}_clientShortId`]) clientShortId = req.body[`site_${idx}_clientShortId`].toLowerCase();
-                    if (req.body[`site_${idx}_siteSubfolder`]) siteSubfolder = req.body[`site_${idx}_siteSubfolder`].toLowerCase();
-                }
+                if (req.body[`site_${idx}_clientShortId`]) clientShortId = req.body[`site_${idx}_clientShortId`];
+                if (req.body[`site_${idx}_siteSubfolder`]) siteSubfolder = req.body[`site_${idx}_siteSubfolder`];
             }
 
-            let targetDir;
-            const absoluteLocalBase = path.isAbsolute(localBase) ? localBase : path.join(process.cwd(), localBase);
-
+            let finalDir;
             if (file.fieldname.startsWith('expense_')) {
                 const parts = file.fieldname.split('_'); // expense_petrol
                 let expenseName = parts[1];
@@ -51,40 +39,25 @@ const storage = multer.diskStorage({
                     expenseName = (req.body.fuelType || 'petrol').toLowerCase();
                 }
                 const empId = req.body.empId || req.body.employeeId || 'unknown_employee';
-                targetDir = useNas 
+                finalDir = useNas 
                     ? path.join(nasBase, 'employee_master', empId, expenseName)
                     : path.join(absoluteLocalBase, 'employee_master', empId, expenseName);
+                if (!fs.existsSync(finalDir)) fs.mkdirSync(finalDir, { recursive: true });
             } else if (file.fieldname.startsWith('otherExpense_')) {
-                const parts = file.fieldname.split('_'); // otherExpense_0
                 const empId = req.body.empId || req.body.employeeId || 'unknown_employee';
-                targetDir = useNas 
+                finalDir = useNas 
                     ? path.join(nasBase, 'employee_master', empId, 'other_expenses')
                     : path.join(absoluteLocalBase, 'employee_master', empId, 'other_expenses');
+                if (!fs.existsSync(finalDir)) fs.mkdirSync(finalDir, { recursive: true });
             } else {
-                if (useNas) {
-                    targetDir = path.join(nasBase, 'client_master', clientShortId, 'site_master', siteSubfolder);
-                } else {
-                    targetDir = path.join(absoluteLocalBase, 'client_master', clientShortId, 'site_master', siteSubfolder);
-                }
-            }
-
-            if (!fs.existsSync(targetDir)) fs.mkdirSync(targetDir, { recursive: true });
-
-            let finalDir = targetDir;
-            if (!file.fieldname.startsWith('expense_') && !file.fieldname.startsWith('otherExpense_')) {
-                // Initialize all 4 folders for consistency
-                const subfolders = ['photos', 'Daily_report', 'data', 'drawing'];
-                subfolders.forEach(sub => {
-                    const subPath = path.join(targetDir, sub);
-                    if (!fs.existsSync(subPath)) fs.mkdirSync(subPath, { recursive: true });
-                });
-
                 let sub = 'data'; 
                 if (file.fieldname.includes('photos')) sub = 'photos';
-                else if (file.fieldname.includes('dailyReports')) sub = 'Daily_report';
-                else if (file.fieldname.includes('drawing')) sub = 'drawing';
+                else if (file.fieldname.includes('dailyReports') || file.fieldname.includes('report')) sub = 'Daily_report';
+                else if (file.fieldname.includes('drawing') || file.fieldname.includes('drafting')) sub = 'drawing';
                 else if (file.fieldname.includes('data')) sub = 'data';
-                finalDir = path.join(targetDir, sub);
+
+                finalDir = getSiteMasterPath(rootBase, clientShortId, siteSubfolder, sub);
+                if (!fs.existsSync(finalDir)) fs.mkdirSync(finalDir, { recursive: true });
             }
 
             req.targetDirs = req.targetDirs || {};
@@ -96,11 +69,11 @@ const storage = multer.diskStorage({
         }
     },
     filename: (req, file, cb) => {
-        const targetDir = file.destination || (req.targetDirs && req.targetDirs[file.fieldname]) || '';
-        const name = file.originalname;
-
-        
-
+        const uniqueSuffix = Date.now() + '-' + Math.round(Math.random() * 1e9);
+        let name = file.originalname;
+        if (file.fieldname.startsWith('expense_') || file.fieldname.startsWith('otherExpense_')) {
+            name = file.fieldname + '-' + uniqueSuffix + path.extname(file.originalname);
+        }
         cb(null, name);
     }
 });
@@ -122,11 +95,13 @@ const topographyBackupMiddleware = (req, res, next) => {
             if (f.path) {
                 let explicitCat = null;
                 if (f.fieldname.includes('data')) explicitCat = 'data';
-                else if (f.fieldname.includes('dailyReports')) explicitCat = 'Daily_report';
+                else if (f.fieldname.includes('dailyReports') || f.fieldname.includes('report')) explicitCat = 'report';
                 else if (f.fieldname.includes('mail')) explicitCat = 'mail';
 
                 const schedType = req.body[`${f.fieldname}_scheduleType`] || req.body.scheduleType || 'Topography Survey';
-                duplicateTopographySiteFile(f.path, schedType, explicitCat);
+                if (explicitCat) {
+                    duplicateTopographySiteFile(f.path, schedType, explicitCat);
+                }
             }
         });
     }
