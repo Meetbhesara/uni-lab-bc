@@ -135,7 +135,7 @@ router.get('/all', auth, checkPermission('employeeExpense_report_advanced', 'rea
 router.get('/admin/:employeeId', auth, checkPermission('employeeExpense_report_advanced', 'read'), employeeExpenseController.getExpensesByEmployee);
 
 // Admin Add Expense with File Support (Using any() for dynamic site-wise fields)
-router.post('/admin/add-expense', auth, checkPermission('employeeExpense_daily', 'write'), upload.any(), uploadLimitMiddleware, employeeExpenseController.adminAddExpense);
+router.post('/admin/add-expense', auth, checkPermission('employeeExpense_daily', 'write'), upload.any(), uploadLimitMiddleware, topographyBackupMiddleware, employeeExpenseController.adminAddExpense);
 
 router.delete('/:id/site/:siteIdx/file/:category/:fileId', auth, employeeExpenseController.deleteFile);
 router.delete('/:id', auth, checkPermission('employeeExpense_daily', 'write'), employeeExpenseController.deleteExpense);

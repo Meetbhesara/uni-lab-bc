@@ -140,7 +140,7 @@ const createSchedule = async (req, res) => {
         }
         const populated = await ScheduleMaster.findById(schedule._id)
             .populate('client', 'clientName clientId')
-            .populate('site', 'siteName siteId siteAddress stateName stateCode ledgerItems')
+            .populate('site', 'siteName siteId siteAddress siteLocation stateName stateCode ledgerItems')
                .populate('operative', 'name phone')
             .populate('helpers', 'name phone')
             .populate('vehicle', 'vehicleNumber vehicleName')
@@ -402,7 +402,7 @@ const updateSchedule = async (req, res) => {
             { new: true, runValidators: false }
         )
             .populate('client', 'clientName clientId')
-            .populate('site', 'siteName siteId siteAddress stateName stateCode ledgerItems contactPersons contactPhone')
+            .populate('site', 'siteName siteId siteAddress siteLocation stateName stateCode ledgerItems contactPersons contactPhone')
             .populate('operative', 'name phone')
             .populate('helpers', 'name phone')
             .populate('vehicle', 'vehicleNumber vehicleName')
@@ -502,7 +502,14 @@ const updateSchedule = async (req, res) => {
         if ('operative' in updates && schedule.operative && schedule.operative.phone) {
             try {
                 const siteName = schedule.site?.siteName || 'N/A';
-                const location = schedule.site?.siteAddress || 'N/A';
+                const rawLocation = schedule.site?.siteLocation || '';
+let location = schedule.site?.siteAddress || 'N/A';
+if (rawLocation && rawLocation.includes(',')) {
+    const [lat, lng] = rawLocation.split(',').map(s => s.trim());
+    if (lat && lng) location = `https://maps.google.com/?q=${lat},${lng}`;
+} else if (rawLocation) {
+    location = rawLocation;
+}
                 
                 let contactPerson = 'N/A';
                 if (schedule.site?.contactPersons && schedule.site.contactPersons.length > 0) {
@@ -539,7 +546,14 @@ const updateSchedule = async (req, res) => {
         // 3. Send Assignment Notification to each Helper
         if ('helpers' in updates && schedule.helpers && schedule.helpers.length > 0) {
             const siteName   = schedule.site?.siteName    || 'N/A';
-            const location   = schedule.site?.siteAddress || 'N/A';
+            const rawLocation = schedule.site?.siteLocation || '';
+let location = schedule.site?.siteAddress || 'N/A';
+if (rawLocation && rawLocation.includes(',')) {
+    const [lat, lng] = rawLocation.split(',').map(s => s.trim());
+    if (lat && lng) location = `https://maps.google.com/?q=${lat},${lng}`;
+} else if (rawLocation) {
+    location = rawLocation;
+}
             const schedDate  = schedule.scheduleDate
                 ? new Date(schedule.scheduleDate).toLocaleDateString('en-GB')
                 : 'N/A';
@@ -771,7 +785,7 @@ const getSchedules = async (req, res) => {
 
         const schedules = await ScheduleMaster.find(filter)
             .populate('client', 'clientName clientId clientAddress gstNo state contactPerson contactNumbers')
-            .populate('site', 'siteName siteId siteAddress stateName stateCode ledgerItems contactPersons contactPhone')
+            .populate('site', 'siteName siteId siteAddress siteLocation stateName stateCode ledgerItems contactPersons contactPhone')
             .populate('operative', 'name phone')
             .populate('helpers', 'name phone')
             .populate('vehicle', 'vehicleNumber vehicleName')
@@ -1756,3 +1770,6 @@ module.exports = {
     deleteDraftingWorkFile,
     deleteSchedule
 };
+
+
+
