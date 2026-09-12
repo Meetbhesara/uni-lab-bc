@@ -1,4 +1,4 @@
-const mongoose = require('mongoose');
+﻿const mongoose = require('mongoose');
 
 const DocumentSchema = new mongoose.Schema({
     name: { type: String, required: true },
@@ -21,10 +21,16 @@ const ClientMasterSchema = new mongoose.Schema({
         type: String,
         trim: true
     },
+    // Legacy single email (kept for backward compatibility)
     email: {
         type: String,
         lowercase: true,
         trim: true
+    },
+    // New: multiple emails support
+    emails: {
+        type: [String],
+        default: []
     },
     contactPerson: {
         name: String,
@@ -65,7 +71,7 @@ const ClientMasterSchema = new mongoose.Schema({
     }
 });
 
-// ── Indexes ────────────────────────────────────────────────────
+// Indexes
 // 1. Client name search
 ClientMasterSchema.index({ clientName: 'text' });
 // 2. Sort by newest client

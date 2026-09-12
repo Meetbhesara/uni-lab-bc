@@ -22,6 +22,7 @@ const storage = multer.diskStorage({
         try {
             let clientShortId = req.body.clientShortId || 'unknown_client';
             let siteSubfolder = req.body.siteSubfolder || 'unknown_site';
+            let siteIdForLookup = req.body.siteIdForLookup || '';
 
             // If fieldname is site_X_photos, resolve specific metadata
             if (file.fieldname.startsWith('site_')) {
@@ -29,6 +30,7 @@ const storage = multer.diskStorage({
                 const idx = parseInt(parts[1]);
                 if (req.body[`site_${idx}_clientShortId`]) clientShortId = req.body[`site_${idx}_clientShortId`];
                 if (req.body[`site_${idx}_siteSubfolder`]) siteSubfolder = req.body[`site_${idx}_siteSubfolder`];
+                if (req.body["site_"+idx+"_siteIdForLookup"]) siteIdForLookup = req.body["site_"+idx+"_siteIdForLookup"];
             }
 
             let finalDir;
@@ -56,7 +58,9 @@ const storage = multer.diskStorage({
                 else if (file.fieldname.includes('drawing') || file.fieldname.includes('drafting')) sub = 'drawing';
                 else if (file.fieldname.includes('data')) sub = 'data';
 
-                finalDir = getSiteMasterPath(rootBase, clientShortId, siteSubfolder, sub);
+                // siteIdForLookup enables prefix-based folder matching in pathHelper
+                // so 'Sunrise Survey' and 'SUNRISE SURVEY' resolve to the SAME folder
+                finalDir = getSiteMasterPath(rootBase, clientShortId, siteSubfolder, sub, siteIdForLookup);
                 if (!fs.existsSync(finalDir)) fs.mkdirSync(finalDir, { recursive: true });
             }
 
@@ -140,7 +144,7 @@ router.post('/admin/add-expense', auth, checkPermission('employeeExpense_daily',
 router.delete('/:id/site/:siteIdx/file/:category/:fileId', auth, employeeExpenseController.deleteFile);
 router.delete('/:id', auth, checkPermission('employeeExpense_daily', 'write'), employeeExpenseController.deleteExpense);
 
-// Last 5 days summary — all employees
+// Last 5 days summary â€” all employees
 router.get('/report/daily-summary', auth, checkPermission('employeeExpense_report_last5days', 'read'), employeeExpenseController.getDailySummary);
 
 // Attendance routes for unscheduled employees

@@ -1,4 +1,4 @@
-const express = require('express');
+﻿const express = require('express');
 const router = express.Router();
 const multer = require('multer');
 const path = require('path');
@@ -79,7 +79,8 @@ const storage = multer.diskStorage({
             else if (file.fieldname === 'draftingWorks' || req.body.documentType === 'drafting' || req.body.documentType === 'drawing') sub = 'drawing';
             else if (file.fieldname === 'docs') sub = ''; // Store directly in targetDir
 
-            const targetDir = getSiteMasterPath(rootBase, clientShortId, siteSubfolder, sub);
+            // Pass siteId for prefix-based folder lookup (avoids case-sensitivity duplicates on NAS)
+            const targetDir = getSiteMasterPath(rootBase, clientShortId, siteSubfolder, sub, siteId);
             if (!fs.existsSync(targetDir)) fs.mkdirSync(targetDir, { recursive: true });
 
             cb(null, targetDir);

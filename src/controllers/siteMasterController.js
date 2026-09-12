@@ -1,4 +1,4 @@
-
+﻿
 const SiteMaster = require('../models/SiteMaster');
 const ClientMaster = require('../models/ClientMaster');
 const path = require('path');
@@ -33,26 +33,54 @@ const storeSiteMaster = async (req, res) => {
         }
         const generatedSiteId = `${clientShortId}-${String(nextSeq).padStart(4, '0')}`;
 
-        const useNas = process.env.USE_NAS;
-        const nasBase = process.env.NAS_BASE_PATH || '/app/storage';
-        const localBase = process.env.LOCAL_BASE_PATH || './uploads';
+        // ── NAS / Local folder creation ──────────────────────────────────────────
+        // Always build the site folder name as: siteId + "-" + sanitized siteName
+        // This is the canonical name stored on disk. When uploading files later,
+        // pathHelper.resolveExistingSiteFolder() finds it by siteId-prefix lookup
+        // so case-sensitivity and future name changes never cause duplicate folders.
+        const { resolveExistingFolder: _resolveClient, getSiteMasterPath: _getSitePath } = require('../utils/pathHelper');
+
+        const useNas = process.env.USE_NAS === 'true';
+        let rootBase = process.env.NAS_BASE_PATH || '/app/storage';
+        if (useNas && !rootBase.startsWith('/')) rootBase = '/' + rootBase;
+        if (!useNas) {
+            const localBase = process.env.LOCAL_BASE_PATH || './uploads';
+            rootBase = path.isAbsolute(localBase) ? localBase : path.join(process.cwd(), localBase);
+        }
+
+        // Site name: sanitize but keep original casing exactly as entered
         const sanitizedSiteName = (siteName || 'unknown_site').trim().replace(/[<>:"\/\\|?*]+/g, '_');
         const siteSubfolder = `${generatedSiteId}-${sanitizedSiteName}`;
-
-        let targetDir;
         const cId = clientShortId.toLowerCase();
-        if (useNas === 'true') {
-            targetDir = path.join(nasBase, 'client_master', cId, 'site_master', siteSubfolder);
-        } else {
-            const absoluteLocalBase = path.isAbsolute(localBase) ? localBase : path.join(process.cwd(), localBase);
-            targetDir = path.join(absoluteLocalBase, 'client_master', cId, 'site_master', siteSubfolder);
+
+        // Resolve the client directory (case-insensitive lookup)
+        const clientMasterRoot = path.join(rootBase, 'client_master');
+        const clientDir = _resolveClient(clientMasterRoot, cId);
+        const siteMasterRoot = path.join(clientDir, 'site_master');
+
+        // Build site folder path — never create a duplicate:
+        // if a folder starting with generatedSiteId already exists (from a previous
+        // failed attempt or renamed site), reuse it instead of creating a new one.
+        let targetDir;
+        if (fs.existsSync(siteMasterRoot)) {
+            const existing = fs.readdirSync(siteMasterRoot)
+                .find(e => e.toLowerCase().startsWith(generatedSiteId.toLowerCase() + '-'));
+            if (existing) {
+                targetDir = path.join(siteMasterRoot, existing);
+                console.log(`[SiteMaster] Reusing existing folder: ${targetDir}`);
+            }
+        }
+        if (!targetDir) {
+            targetDir = path.join(siteMasterRoot, siteSubfolder);
+            console.log(`[SiteMaster] Creating new folder: ${targetDir}`);
         }
 
         if (!fs.existsSync(targetDir)) {
             fs.mkdirSync(targetDir, { recursive: true });
         }
 
-        const subfolders = ['photos', 'Daily_report', 'data'];
+        // Ensure all 4 standard subfolders exist
+        const subfolders = ['photos', 'Daily_report', 'data', 'drawing'];
         subfolders.forEach(sub => {
             const subPath = path.join(targetDir, sub);
             if (!fs.existsSync(subPath)) fs.mkdirSync(subPath, { recursive: true });
@@ -747,3 +775,4 @@ module.exports = {
     uploadRevision,
     deleteGlobalDocument
 };
+
