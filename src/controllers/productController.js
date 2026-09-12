@@ -1,4 +1,4 @@
-const Product = require('../models/Product');
+﻿const Product = require('../models/Product');
 const SystemSettings = require('../models/SystemSettings');
 const cloudinary = require('../configs/cloudinary');
 const fs = require('fs');
@@ -61,7 +61,7 @@ const removeLocalFile = (relativePath) => {
             const filePath = path.join(productsUploadPath, subPath);
             if (fs.existsSync(filePath)) {
                 fs.unlinkSync(filePath);
-                console.log(`🗑️ Deleted local file: ${filePath}`);
+                console.log(`ðŸ—‘ï¸ Deleted local file: ${filePath}`);
             }
         }
     } catch (err) {
@@ -188,7 +188,7 @@ const getProducts = async (req, res) => {
 
         res.json(products);
     } catch (err) {
-        console.error('❌ Error in getProducts:', err);
+        console.error('âŒ Error in getProducts:', err);
         res.status(500).json({ success: false, message: err.message || 'Server Error' });
     }
 };
@@ -249,7 +249,7 @@ const getProductById = async (req, res) => {
 
         res.json(p);
     } catch (err) {
-        console.error('❌ Error in getProductById:', err);
+        console.error('âŒ Error in getProductById:', err);
         if (err.kind === 'ObjectId') {
             return res.status(404).json({ msg: 'Product not found' });
         }
@@ -258,7 +258,7 @@ const getProductById = async (req, res) => {
 };
 
 const createProduct = async (req, res) => {
-    console.log('🚀 Backend [createProduct] request received');
+    console.log('ðŸš€ Backend [createProduct] request received');
     console.log('Payload body:', req.body);
     console.log('Uploaded files:', req.files);
     try {
@@ -268,7 +268,7 @@ const createProduct = async (req, res) => {
             calibrationDealerPrice, calibrationVendors } = req.body;
 
         if (!name || !description || !category) {
-            console.warn('⚠️ Validation failed: Missing required fields (name, description, category)');
+            console.warn('âš ï¸ Validation failed: Missing required fields (name, description, category)');
             return res.status(400).json({ msg: 'Please provide required fields: name, description, category' });
         }
 
@@ -405,22 +405,22 @@ const createProduct = async (req, res) => {
         });
 
         const product = await newProduct.save();
-        console.log('✅ createProduct SUCCESS:', { productId: product._id, name: product.name });
+        console.log('âœ… createProduct SUCCESS:', { productId: product._id, name: product.name });
         res.json(product);
     } catch (err) {
-        console.error('❌ Error in createProduct:', err);
+        console.error('âŒ Error in createProduct:', err);
         res.status(500).json({ success: false, message: err.message || 'Server Error' });
     }
 };
 
 const updateProduct = async (req, res) => {
-    console.log(`🚀 Backend [updateProduct] request received for ID: ${req.params.id}`);
+    console.log(`ðŸš€ Backend [updateProduct] request received for ID: ${req.params.id}`);
     console.log('Payload body:', req.body);
     console.log('Uploaded files:', req.files);
     try {
         let product = await Product.findById(req.params.id);
         if (!product) {
-            console.warn(`⚠️ Product not found with ID: ${req.params.id}`);
+            console.warn(`âš ï¸ Product not found with ID: ${req.params.id}`);
             return res.status(404).json({ msg: 'Product not found' });
         }
 
@@ -603,11 +603,11 @@ const updateProduct = async (req, res) => {
         }
 
         await product.save();
-        console.log(`✅ updateProduct SUCCESS for ID: ${req.params.id}`, { name: product.name });
+        console.log(`âœ… updateProduct SUCCESS for ID: ${req.params.id}`, { name: product.name });
         res.json(product);
 
     } catch (err) {
-        console.error('❌ Error in updateProduct:', err);
+        console.error('âŒ Error in updateProduct:', err);
         res.status(500).json({ success: false, message: err.message || 'Server Error' });
     }
 };
@@ -651,7 +651,7 @@ const deleteProduct = async (req, res) => {
         await product.deleteOne();
         res.json({ msg: 'Product removed' });
     } catch (err) {
-        console.error('❌ Error in deleteProduct:', err);
+        console.error('âŒ Error in deleteProduct:', err);
         res.status(500).json({ success: false, message: err.message || 'Server Error' });
     }
 }
@@ -669,7 +669,7 @@ async function getSubcategories(req, res) {
         }
         res.json({ success: true, data: subcategories });
     } catch (err) {
-        console.error('❌ Error in getSubcategories:', err);
+        console.error('âŒ Error in getSubcategories:', err);
         res.status(500).json({ success: false, message: 'Server Error' });
     }
 }
@@ -687,12 +687,23 @@ async function saveSubcategories(req, res) {
 
         res.json({ success: true, message: 'Subcategories saved successfully', data: subcategories });
     } catch (err) {
-        console.error('❌ Error in saveSubcategories:', err);
+        console.error('âŒ Error in saveSubcategories:', err);
         res.status(500).json({ success: false, message: 'Server Error' });
     }
 }
 
+
+// Dashboard fast-count: returns only the total product count
+const getProductCount = async (req, res) => {
+    try {
+        const count = await Product.countDocuments();
+        res.json({ success: true, count });
+    } catch (err) {
+        res.status(500).json({ success: false, message: err.message });
+    }
+};
 module.exports = {
+    getProductCount,
     getProducts,
     getProductById,
     createProduct,
@@ -701,3 +712,4 @@ module.exports = {
     getSubcategories,
     saveSubcategories
 };
+

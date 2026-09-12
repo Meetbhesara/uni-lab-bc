@@ -1,4 +1,4 @@
-const express = require('express');
+﻿const express = require('express');
 const router = express.Router();
 const Enquiry = require('../models/Enquiry');
 const User = require('../models/User');
@@ -89,6 +89,19 @@ router.post('/', async (req, res) => {
     }
 });
 
+
+// Dashboard fast-stats: counts only using MongoDB aggregation, no full documents
+router.get('/stats', async (req, res) => {
+    try {
+        const [total, unseen] = await Promise.all([
+            Enquiry.countDocuments(),
+            Enquiry.countDocuments({ isSeen: false })
+        ]);
+        res.json({ success: true, total, unseen });
+    } catch (err) {
+        res.status(500).json({ success: false, message: err.message });
+    }
+});
 // Get all enquiries with populated product details
 router.get('/', async (req, res) => {
     try {
@@ -171,3 +184,4 @@ router.post('/:id/follow-up', async (req, res) => {
 });
 
 module.exports = router;
+

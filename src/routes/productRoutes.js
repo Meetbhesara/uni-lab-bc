@@ -1,4 +1,4 @@
-const express = require('express');
+﻿const express = require('express');
 const router = express.Router();
 const productController = require('../controllers/productController');
 const verifyAdmin = require('../middlewares/verifyAdmin');
@@ -14,6 +14,7 @@ const cpUpload = upload.fields([
 
 router.get('/', productController.getProducts);
 router.get('/subcategories', productController.getSubcategories);
+router.get('/count', productController.getProductCount);
 router.get('/:id', productController.getProductById);
 
 const auth = require('../middlewares/auth');
@@ -24,3 +25,4 @@ router.put('/:id', auth, verifyAdmin, cpUpload, productController.updateProduct)
 router.delete('/:id', auth, verifyAdmin, productController.deleteProduct);
 
 module.exports = router;
+

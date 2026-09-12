@@ -1,9 +1,23 @@
-const express = require('express');
+﻿const express = require('express');
 const router = express.Router();
 const quotationController = require('../controllers/quotationController');
 const { sendFollowUpReminders } = require('../cron/followUpCron');
 
 router.post('/', quotationController.createQuotation);
+// Dashboard fast-stats: counts only, no full documents
+router.get('/stats', async (req, res) => {
+    try {
+        const Quotation = require('../models/Quotation');
+        const [total, done, rejected] = await Promise.all([
+            Quotation.countDocuments(),
+            Quotation.countDocuments({ status: 'Done' }),
+            Quotation.countDocuments({ status: 'Reject' })
+        ]);
+        res.json({ success: true, total, done, rejected });
+    } catch (err) {
+        res.status(500).json({ success: false, message: err.message });
+    }
+});
 router.get('/', quotationController.getQuotations);
 router.get('/test-followup-cron', async (req, res) => {
     try {
@@ -18,4 +32,5 @@ router.delete('/:id', quotationController.deleteQuotation);
 router.post('/:id/follow-up', quotationController.addFollowUp);
 
 module.exports = router;
+
 
