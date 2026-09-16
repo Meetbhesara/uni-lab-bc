@@ -1,33 +1,47 @@
-const express = require('express');
+﻿const express = require('express');
 const router = express.Router();
 const multer = require('multer');
 const path = require('path');
 const fs = require('fs');
 const { storeVehicleMaster, getVehicles, updateVehicleMaster, deleteVehicleMaster } = require('../controllers/vehicleMasterController');
 
-// Dynamic Storage Configuration
+// ─ Which fields go into which subfolder ─
+const PURCHASE_FIELDS = ['purchaseAadharDoc', 'purchasePanDoc'];
+const SOLD_FIELDS     = ['sellAadharDoc', 'sellPanDoc'];
+
+const getSubfolder = (fieldname) => {
+    if (PURCHASE_FIELDS.includes(fieldname)) return 'purchase';
+    if (SOLD_FIELDS.includes(fieldname))     return 'sold';
+    return '';   // vehicle photos, RC, insurance, PUC → vehicle root
+};
+
+// ─ Dynamic Storage ─
 const storage = multer.diskStorage({
     destination: (req, file, cb) => {
-        // Use flag from .env to decide storage mode
-        const useNas = process.env.USE_NAS;
-        let nasBase = process.env.NAS_BASE_PATH || '/app/storage';
-        if (useNas === 'true' && !nasBase.startsWith('/')) nasBase = '/' + nasBase;
+        const useNas   = process.env.USE_NAS;
+        let nasBase    = process.env.NAS_BASE_PATH  || '/app/storage';
         const localBase = process.env.LOCAL_BASE_PATH || './uploads';
 
-        const vehicleNum = (req.body.vehicleNumber || 'unknown').trim().replace(/[^a-z0-9]/gi, '_').toLowerCase();
+        if (useNas === 'true' && !nasBase.startsWith('/')) nasBase = '/' + nasBase;
 
-        let targetDir;
+        const vehicleNum = (req.body.vehicleNumber || 'unknown')
+            .trim().replace(/[^a-z0-9]/gi, '_').toLowerCase();
+
+        const subfolder = getSubfolder(file.fieldname);
+
+        let baseDir;
         if (useNas === 'true') {
-            targetDir = path.join(nasBase, 'vehicle_master', vehicleNum);
-            console.log('NAS MODE: targetDir is', targetDir);
+            baseDir = path.join(nasBase, 'vehicle_master', vehicleNum);
         } else {
-            const absoluteLocalBase = path.isAbsolute(localBase) ? localBase : path.join(process.cwd(), localBase);
-            targetDir = path.join(absoluteLocalBase, 'vehicle_master', vehicleNum);
-            console.log('LOCAL MODE: targetDir is', targetDir);
+            const absLocal = path.isAbsolute(localBase)
+                ? localBase
+                : path.join(process.cwd(), localBase);
+            baseDir = path.join(absLocal, 'vehicle_master', vehicleNum);
         }
 
+        const targetDir = subfolder ? path.join(baseDir, subfolder) : baseDir;
+
         if (!fs.existsSync(targetDir)) {
-            console.log('Creating directory:', targetDir);
             fs.mkdirSync(targetDir, { recursive: true });
         }
         cb(null, targetDir);
@@ -40,35 +54,35 @@ const storage = multer.diskStorage({
 
 const upload = multer({
     storage,
-    limits: { fileSize: 5 * 1024 * 1024 }, // 5MB limit
+    limits: { fileSize: 5 * 1024 * 1024 }, // 5 MB
     fileFilter: (req, file, cb) => {
-        const allowedTypes = /jpeg|jpg|png|pdf/;
-        const extname = allowedTypes.test(path.extname(file.originalname).toLowerCase());
-        const mimetype = allowedTypes.test(file.mimetype);
-        if (extname && mimetype) {
-            return cb(null, true);
-        }
-        cb(new Error('Only images and PDFs are allowed'));
+        const allowed = /jpeg|jpg|png|pdf/;
+        const ok = allowed.test(path.extname(file.originalname).toLowerCase())
+                && allowed.test(file.mimetype);
+        ok ? cb(null, true) : cb(new Error('Only images and PDFs are allowed'));
     }
 });
 
-router.post('/', upload.fields([
-    { name: 'rcBook', maxCount: 1 },
-    { name: 'insurancePhoto', maxCount: 1 },
-    { name: 'pucPhoto', maxCount: 1 },
-    { name: 'vehiclePhotos', maxCount: 10 },
-    { name: 'documents', maxCount: 10 }
-]), storeVehicleMaster);
+// upload.any() accepts any field name without throwing MulterError: Unexpected field.
+// The normalise middleware converts the resulting req.files array back into the
+// keyed object format { fieldname: [file, ...] } that the controller expects.
+const vehicleUpload = upload.any();
 
-router.put('/:id', upload.fields([
-    { name: 'rcBook', maxCount: 1 },
-    { name: 'insurancePhoto', maxCount: 1 },
-    { name: 'pucPhoto', maxCount: 1 },
-    { name: 'vehiclePhotos', maxCount: 10 },
-    { name: 'documents', maxCount: 10 }
-]), updateVehicleMaster);
+const normaliseFiles = (req, res, next) => {
+    if (Array.isArray(req.files)) {
+        const obj = {};
+        req.files.forEach(f => {
+            if (!obj[f.fieldname]) obj[f.fieldname] = [];
+            obj[f.fieldname].push(f);
+        });
+        req.files = obj;
+    }
+    next();
+};
 
-router.get('/', getVehicles);
+router.post('/',      vehicleUpload, normaliseFiles, storeVehicleMaster);
+router.put('/:id',   vehicleUpload, normaliseFiles, updateVehicleMaster);
+router.get('/',      getVehicles);
 router.delete('/:id', deleteVehicleMaster);
 
 module.exports = router;
