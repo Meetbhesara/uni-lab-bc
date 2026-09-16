@@ -687,7 +687,12 @@ exports.getExpensesByEmployee = async (req, res) => {
 
 exports.getAllExpenses = async (req, res) => {
     try {
-        const expenses = await EmployeeExpense.find()
+        const { startDate, endDate } = req.query;
+        const filter = {};
+        if (startDate && endDate) {
+            filter.date = { $gte: new Date(startDate), $lte: new Date(endDate) };
+        }
+        const expenses = await EmployeeExpense.find(filter)
             .populate('employeeId', 'name')
             .populate('clientSites.clientId', 'clientName')
             .populate('clientSites.siteId', 'siteName')
@@ -1669,3 +1674,4 @@ exports.deleteFile = async (req, res) => {
         res.status(500).json({ success: false, message: 'Server Error' });
     }
 };
+
