@@ -1,4 +1,4 @@
-const Quotation = require('../models/Quotation');
+﻿const Quotation = require('../models/Quotation');
 const Enquiry = require('../models/Enquiry');
 const Counter = require('../models/Counter');
 
@@ -142,12 +142,39 @@ const createQuotation = async (req, res) => {
 
 const getQuotations = async (req, res) => {
     try {
-        const list = await Quotation.find()
-            .populate('enquiry')
-            .populate('items.product')
-            .sort({ createdAt: -1 })
-            .lean();
-        res.json(list);
+        const page   = Math.max(1, parseInt(req.query.page)  || 1);
+        const limit  = Math.min(100, parseInt(req.query.limit) || 20);
+        const skip   = (page - 1) * limit;
+        const search = (req.query.search || '').trim();
+        // status param: single value e.g. 'Sent'  OR  comma-separated e.g. 'Done,Reject'
+        const statusParam = (req.query.status || '').trim();
+
+        // Build MongoDB filter
+        const filter = {};
+        if (statusParam) {
+            const statuses = statusParam.split(',').map(s => s.trim()).filter(Boolean);
+            filter.status = statuses.length === 1 ? statuses[0] : { $in: statuses };
+        }
+        if (search) {
+            filter.$or = [
+                { partyName: { $regex: search, $options: 'i' } },
+                { refNo:     { $regex: search, $options: 'i' } },
+                { mobile:    { $regex: search, $options: 'i' } }
+            ];
+        }
+
+        const [data, total] = await Promise.all([
+            Quotation.find(filter)
+                .populate('enquiry')
+                .populate('items.product')
+                .sort({ createdAt: -1 })
+                .skip(skip)
+                .limit(limit)
+                .lean(),
+            Quotation.countDocuments(filter)
+        ]);
+
+        res.json({ data, total, page, totalPages: Math.ceil(total / limit) });
     } catch (err) {
         console.error(err.message);
         res.status(500).send('Server Error');

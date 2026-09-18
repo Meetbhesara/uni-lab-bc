@@ -3,6 +3,7 @@ const router = express.Router();
 const Enquiry = require('../models/Enquiry');
 const User = require('../models/User');
 const Cart = require('../models/Cart');
+
 // Create enquiry
 router.post('/', async (req, res) => {
     try {
@@ -102,15 +103,54 @@ router.get('/stats', async (req, res) => {
         res.status(500).json({ success: false, message: err.message });
     }
 });
-// Get all enquiries with populated product details
+
+// ── GET /api/enquiries — paginated, filterable by type & search ──────────────
+// Query params:
+//   type     = 'enquiry' | 'whatsapp'  (required for tab separation)
+//   page     = 1, 2, ...               (default: 1)
+//   limit    = 20                      (default: 20, max: 100)
+//   search   = text                    (searches Name, phone, email)
 router.get('/', async (req, res) => {
     try {
-        const enquiries = await Enquiry.find()
-            .populate('products.productId')
-            .sort({ createdAt: -1 })
-            .lean();
-        res.json(enquiries);
-    } catch (e) { res.status(500).send('Error'); }
+        const page  = Math.max(1, parseInt(req.query.page)  || 1);
+        const limit = Math.min(100, parseInt(req.query.limit) || 20);
+        const skip  = (page - 1) * limit;
+        const search = (req.query.search || '').trim();
+        const typeFilter = req.query.type; // 'enquiry' or 'whatsapp'
+
+        // Build filter
+        const filter = {};
+        if (typeFilter) {
+            filter.type = typeFilter;
+        }
+        if (search) {
+            filter.$or = [
+                { Name:  { $regex: search, $options: 'i' } },
+                { phone: { $regex: search, $options: 'i' } },
+                { email: { $regex: search, $options: 'i' } }
+            ];
+        }
+
+        const [data, total] = await Promise.all([
+            Enquiry.find(filter)
+                .populate('products.productId')
+                .sort({ createdAt: -1 })
+                .skip(skip)
+                .limit(limit)
+                .lean(),
+            Enquiry.countDocuments(filter)
+        ]);
+
+        res.json({
+            data,
+            total,
+            page,
+            totalPages: Math.ceil(total / limit)
+        });
+    } catch (e) {
+        console.error(e);
+        res.status(500).send('Error');
+    }
 });
 
 // Mark enquiry as seen
@@ -151,6 +191,7 @@ router.delete('/:id', async (req, res) => {
         res.status(500).send('Error removing enquiry');
     }
 });
+
 // Add Follow-up
 router.post('/:id/follow-up', async (req, res) => {
     try {
@@ -184,4 +225,3 @@ router.post('/:id/follow-up', async (req, res) => {
 });
 
 module.exports = router;
-
