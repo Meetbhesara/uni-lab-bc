@@ -1,4 +1,4 @@
-﻿const VehicleMaster = require('../models/VehicleMaster');
+const VehicleMaster = require('../models/VehicleMaster');
 const path = require('path');
 const { broadcast } = require('../utils/sseManager');
 
@@ -32,11 +32,40 @@ const safeParse = (val, fallback = {}) => {
 // ─── Pick first element from multer array or single file ─────────────────────
 const first = (f) => (Array.isArray(f) ? f[0] : f);
 
+// ─── Generate unique barcode and vehicle ID ──────────────────────────────────
+const generateNextVehicleIdAndBarcode = async (preferredId) => {
+    let vehicleId = preferredId;
+    if (!vehicleId) {
+        const allVehicles = await VehicleMaster.find({}, { vehicleId: 1 });
+        let max = 0;
+        allVehicles.forEach(v => {
+            if (v.vehicleId) {
+                const num = parseInt(String(v.vehicleId).replace(/\D/g, ''), 10);
+                if (!isNaN(num) && num > max) max = num;
+            }
+        });
+        vehicleId = `V-${String(max + 1).padStart(3, '0')}`;
+    }
+    
+    const vCode = vehicleId.replace(/[^a-zA-Z0-9]/g, '').toUpperCase();
+    let barcode = '';
+    let isUnique = false;
+    let attempts = 0;
+    while (!isUnique && attempts < 20) {
+        attempts++;
+        const randomSuffix = Math.floor(1000 + Math.random() * 9000);
+        barcode = `UE-${vCode}-${randomSuffix}`;
+        const existing = await VehicleMaster.findOne({ barcode });
+        if (!existing) isUnique = true;
+    }
+    return { vehicleId, barcode };
+};
+
 // ─── CREATE ───────────────────────────────────────────────────────────────────
 const storeVehicleMaster = async (req, res) => {
     try {
         const {
-            vehicleNumber, vehicleName, insuranceDate, pucDate, serviceDate,
+            vehicleId: reqVehicleId, barcode: reqBarcode, vehicleNumber, vehicleName, insuranceDate, pucDate, serviceDate,
             logInName, primaryPhotoName, primaryType,
             purchaseInfo: rawPurchaseInfo,
             sellInfo:     rawSellInfo,
@@ -54,6 +83,8 @@ const storeVehicleMaster = async (req, res) => {
         // ── Purchase owner docs  (go in /purchase/ subfolder) ─────────────────
         const purchaseAadharData = files.purchaseAadharDoc ? makeDoc(first(files.purchaseAadharDoc), folderName) : null;
         const purchasePanData    = files.purchasePanDoc    ? makeDoc(first(files.purchasePanDoc),    folderName) : null;
+        const purchaseOldRcData  = files.purchaseOldRc     ? makeDoc(first(files.purchaseOldRc),     folderName) : null;
+        const purchaseOldPucData = files.purchaseOldPuc    ? makeDoc(first(files.purchaseOldPuc),    folderName) : null;
 
         // ── Sell-out buyer docs  (go in /sold/ subfolder) ─────────────────────
         const sellAadharData = files.sellAadharDoc ? makeDoc(first(files.sellAadharDoc), folderName) : null;
@@ -84,12 +115,24 @@ const storeVehicleMaster = async (req, res) => {
         const purchaseInfo = safeParse(rawPurchaseInfo, {});
         const sellInfo     = safeParse(rawSellInfo,     {});
 
+        let vehicleId = reqVehicleId;
+        let barcode = reqBarcode;
+        if (!vehicleId || !barcode) {
+            const gen = await generateNextVehicleIdAndBarcode(vehicleId);
+            if (!vehicleId) vehicleId = gen.vehicleId;
+            if (!barcode) barcode = gen.barcode;
+        }
+
         const record = new VehicleMaster({
+            vehicleId,
+            barcode,
             vehicleNumber, vehicleName, insuranceDate, pucDate, serviceDate, logInName,
             isSold:           isSold === 'true' || isSold === true,
             purchaseInfo,
             purchaseAadharDoc: purchaseAadharData,
             purchasePanDoc:    purchasePanData,
+            purchaseOldRc:     purchaseOldRcData,
+            purchaseOldPuc:    purchaseOldPucData,
             sellInfo,
             sellAadharDoc: sellAadharData,
             sellPanDoc:    sellPanData,
@@ -113,6 +156,23 @@ const storeVehicleMaster = async (req, res) => {
 const getVehicles = async (req, res) => {
     try {
         const vehicles = await VehicleMaster.find().sort({ createdAt: -1 });
+        // Ensure all vehicles have a unique vehicleId and barcode
+        for (let i = 0; i < vehicles.length; i++) {
+            const v = vehicles[i];
+            let needSave = false;
+            if (!v.vehicleId) {
+                v.vehicleId = `V-${String(vehicles.length - i).padStart(3, '0')}`;
+                needSave = true;
+            }
+            if (!v.barcode) {
+                const vCode = v.vehicleId.replace(/[^a-zA-Z0-9]/g, '').toUpperCase();
+                v.barcode = `UE-${vCode}-${Math.floor(1000 + Math.random() * 9000)}`;
+                needSave = true;
+            }
+            if (needSave) {
+                await v.save();
+            }
+        }
         res.json({ success: true, data: vehicles });
     } catch (error) {
         res.status(500).json({ success: false, message: error.message });
@@ -124,7 +184,7 @@ const updateVehicleMaster = async (req, res) => {
     try {
         const _id = req.params.id;
         const {
-            vehicleNumber, vehicleName, insuranceDate, pucDate, serviceDate, logInName,
+            vehicleId, barcode, vehicleNumber, vehicleName, insuranceDate, pucDate, serviceDate, logInName,
             existingVehiclePhotos, primaryPhotoUrl, primaryPhotoName, primaryType,
             purchaseInfo: rawPurchaseInfo,
             sellInfo:     rawSellInfo,
@@ -136,6 +196,12 @@ const updateVehicleMaster = async (req, res) => {
         if (!record) return res.status(404).json({ success: false, message: 'Vehicle not found' });
 
         // ── Scalar fields ─────────────────────────────────────────────────────
+        if (vehicleId !== undefined && vehicleId) record.vehicleId = vehicleId;
+        if (barcode !== undefined && barcode) record.barcode = barcode;
+        if (!record.barcode) {
+            const gen = await generateNextVehicleIdAndBarcode(record.vehicleId);
+            record.barcode = gen.barcode;
+        }
         if (vehicleNumber !== undefined) record.vehicleNumber = vehicleNumber;
         if (vehicleName   !== undefined) record.vehicleName   = vehicleName;
         if (insuranceDate !== undefined) record.insuranceDate = insuranceDate;
@@ -154,10 +220,12 @@ const updateVehicleMaster = async (req, res) => {
         if (files.rcBook)            record.rcBook            = makeDoc(first(files.rcBook),            folderName);
         if (files.insurancePhoto)    record.insurancePhoto    = makeDoc(first(files.insurancePhoto),    folderName);
         if (files.pucPhoto)          record.pucPhoto          = makeDoc(first(files.pucPhoto),          folderName);
-        if (files.purchaseAadharDoc) record.purchaseAadharDoc = makeDoc(first(files.purchaseAadharDoc), folderName); // → /purchase/
-        if (files.purchasePanDoc)    record.purchasePanDoc    = makeDoc(first(files.purchasePanDoc),    folderName); // → /purchase/
-        if (files.sellAadharDoc)     record.sellAadharDoc     = makeDoc(first(files.sellAadharDoc),     folderName); // → /sold/
-        if (files.sellPanDoc)        record.sellPanDoc        = makeDoc(first(files.sellPanDoc),        folderName); // → /sold/
+        if (files.purchaseAadharDoc) record.purchaseAadharDoc = makeDoc(first(files.purchaseAadharDoc), folderName);
+        if (files.purchasePanDoc)    record.purchasePanDoc    = makeDoc(first(files.purchasePanDoc),    folderName);
+        if (files.purchaseOldRc)     record.purchaseOldRc     = makeDoc(first(files.purchaseOldRc),     folderName);
+        if (files.purchaseOldPuc)    record.purchaseOldPuc    = makeDoc(first(files.purchaseOldPuc),    folderName);
+        if (files.sellAadharDoc)     record.sellAadharDoc     = makeDoc(first(files.sellAadharDoc),     folderName);
+        if (files.sellPanDoc)        record.sellPanDoc        = makeDoc(first(files.sellPanDoc),        folderName);
 
         if (files.documents) {
             const flist = Array.isArray(files.documents) ? files.documents : [files.documents];
@@ -233,4 +301,23 @@ const deleteVehicleMaster = async (req, res) => {
     }
 };
 
-module.exports = { storeVehicleMaster, getVehicles, updateVehicleMaster, deleteVehicleMaster };
+// ─── GET VEHICLE BY BARCODE (for scanner comparison & lookup) ─────────────────
+const getVehicleByBarcode = async (req, res) => {
+    try {
+        const { barcode } = req.params;
+        if (!barcode) return res.status(400).json({ success: false, message: 'Barcode is required' });
+        const cleanBarcode = barcode.trim();
+        const vehicle = await VehicleMaster.findOne({
+            barcode: { $regex: new RegExp('^' + cleanBarcode + '$', 'i') }
+        });
+        if (!vehicle) {
+            return res.status(404).json({ success: false, message: 'Vehicle with barcode "' + barcode + '" not found' });
+        }
+        res.json({ success: true, data: vehicle });
+    } catch (error) {
+        res.status(500).json({ success: false, message: error.message });
+    }
+};
+
+module.exports = { storeVehicleMaster, getVehicles, updateVehicleMaster, deleteVehicleMaster, getVehicleByBarcode };
+

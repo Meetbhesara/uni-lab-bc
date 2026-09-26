@@ -785,10 +785,12 @@ const getAdminLoginReport = async (req, res) => {
             evaluateUpToDay = 0;
         }
 
-        const admins = await User.find({
-            isAdmin: true,
-            isSuperAdmin: { $ne: true }
-        }).select('_id name email phone companyName createdAt').sort({ name: 1 }).lean();
+        const includeSuperAdmin = req.query.includeSuperAdmin === 'true';
+        const adminQuery = includeSuperAdmin
+            ? { $or: [{ isAdmin: true }, { isSuperAdmin: true }] }
+            : { isAdmin: true, isSuperAdmin: { $ne: true } };
+
+        const admins = await User.find(adminQuery).select('_id name email phone companyName createdAt isSuperAdmin').sort({ name: 1 }).lean();
 
         const logs = await AdminLoginLog.find({
             dateStr: { $regex: `^${targetMonth}-` }
@@ -868,6 +870,7 @@ const getAdminLoginReport = async (req, res) => {
                 phone: admin.phone,
                 companyName: admin.companyName,
                 createdAt: admin.createdAt,
+                isSuperAdmin: !!admin.isSuperAdmin,
                 presentDays,
                 absentDays,
                 totalEvaluated,

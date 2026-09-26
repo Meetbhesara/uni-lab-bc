@@ -1,4 +1,4 @@
-﻿const mongoose = require('mongoose');
+const mongoose = require('mongoose');
 
 // Sub-schema for owner info (purchase or sell)
 const OwnerInfoSchema = new mongoose.Schema({
@@ -15,6 +15,18 @@ const OwnerInfoSchema = new mongoose.Schema({
 }, { _id: false });
 
 const VehicleMasterSchema = new mongoose.Schema({
+    vehicleId: {
+        type: String,
+        trim: true,
+        uppercase: true
+    },
+    barcode: {
+        type: String,
+        trim: true,
+        uppercase: true,
+        unique: true,
+        sparse: true
+    },
     vehicleNumber: {
         type: String,
         trim: true,
@@ -46,7 +58,7 @@ const VehicleMasterSchema = new mongoose.Schema({
     },
     logInName: { type: String },
 
-    // ── Purchase Owner Details ──────────────────────────────────────────────
+    // -- Purchase Owner Details ----------------------------------------------
     purchaseInfo:    { type: OwnerInfoSchema, default: () => ({}) },
     purchaseAadharDoc: {
         name: String,
@@ -58,8 +70,18 @@ const VehicleMasterSchema = new mongoose.Schema({
         url:  String,
         path: String
     },
+    purchaseOldRc: {
+        name: String,
+        url:  String,
+        path: String
+    },
+    purchaseOldPuc: {
+        name: String,
+        url:  String,
+        path: String
+    },
 
-    // ── Sell-Out Details ────────────────────────────────────────────────────
+    // -- Sell-Out Details ----------------------------------------------------
     isSold:      { type: Boolean, default: false },
     sellInfo:    { type: OwnerInfoSchema, default: () => ({}) },
     sellAadharDoc: {
@@ -73,7 +95,7 @@ const VehicleMasterSchema = new mongoose.Schema({
         path: String
     },
 
-    // ── Photos & Misc docs ──────────────────────────────────────────────────
+    // -- Photos & Misc docs --------------------------------------------------
     vehiclePhotos: [{
         name: String,
         url:  String,
@@ -90,3 +112,4 @@ const VehicleMasterSchema = new mongoose.Schema({
 });
 
 module.exports = mongoose.model('VehicleMaster', VehicleMasterSchema);
+

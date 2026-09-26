@@ -1,21 +1,21 @@
-﻿const express = require('express');
+const express = require('express');
 const router = express.Router();
 const multer = require('multer');
 const path = require('path');
 const fs = require('fs');
-const { storeVehicleMaster, getVehicles, updateVehicleMaster, deleteVehicleMaster } = require('../controllers/vehicleMasterController');
+const { storeVehicleMaster, getVehicles, updateVehicleMaster, deleteVehicleMaster, getVehicleByBarcode } = require('../controllers/vehicleMasterController');
 
-// ─ Which fields go into which subfolder ─
-const PURCHASE_FIELDS = ['purchaseAadharDoc', 'purchasePanDoc'];
+// - Which fields go into which subfolder -
+const PURCHASE_FIELDS = ['purchaseAadharDoc', 'purchasePanDoc', 'purchaseOldRc', 'purchaseOldPuc'];
 const SOLD_FIELDS     = ['sellAadharDoc', 'sellPanDoc'];
 
 const getSubfolder = (fieldname) => {
     if (PURCHASE_FIELDS.includes(fieldname)) return 'purchase';
     if (SOLD_FIELDS.includes(fieldname))     return 'sold';
-    return '';   // vehicle photos, RC, insurance, PUC → vehicle root
+    return '';   // vehicle photos, RC, insurance, PUC ? vehicle root
 };
 
-// ─ Dynamic Storage ─
+// - Dynamic Storage -
 const storage = multer.diskStorage({
     destination: (req, file, cb) => {
         const useNas   = process.env.USE_NAS;
@@ -54,7 +54,7 @@ const storage = multer.diskStorage({
 
 const upload = multer({
     storage,
-    limits: { fileSize: 5 * 1024 * 1024 }, // 5 MB
+    limits: { fileSize: 50 * 1024 * 1024 }, // 50 MB
     fileFilter: (req, file, cb) => {
         const allowed = /jpeg|jpg|png|pdf/;
         const ok = allowed.test(path.extname(file.originalname).toLowerCase())
@@ -82,7 +82,9 @@ const normaliseFiles = (req, res, next) => {
 
 router.post('/',      vehicleUpload, normaliseFiles, storeVehicleMaster);
 router.put('/:id',   vehicleUpload, normaliseFiles, updateVehicleMaster);
+router.get('/barcode/:barcode', getVehicleByBarcode);
 router.get('/',      getVehicles);
 router.delete('/:id', deleteVehicleMaster);
 
 module.exports = router;
+
