@@ -57,22 +57,30 @@ const verifyEmployeeOtp = async (req, res) => {
         const payload = { employeeId: employee._id, type: 'employee' };
         const token = jwt.sign(payload, process.env.JWT_SECRET, { expiresIn: process.env.JWT_EXPIRE || '365d' });
 
-        res.json({
+                res.json({
             success: true,
             token,
             employee: {
                 _id: employee._id,
+                empId: employee.empId,
                 name: employee.name,
+                designation: employee.designation,
+                salary: employee.salary,
+                foodAllowance: employee.foodAllowance,
                 email: employee.email,
                 phone: employee.phone,
                 photo: employee.photo,
                 addressLine1: employee.addressLine1,
                 addressLine2: employee.addressLine2,
                 emergencyContact: employee.emergencyContact,
+                bankDetails: employee.bankDetails,
                 aadharCard: employee.aadharCard,
                 panCard: employee.panCard,
                 voterId: employee.voterId,
                 drivingLicense: employee.drivingLicense,
+                paymentMode: employee.paymentMode,
+                status: employee.status,
+                createdAt: employee.createdAt
             }
         });
     } catch (err) {

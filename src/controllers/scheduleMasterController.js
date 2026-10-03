@@ -143,7 +143,7 @@ const createSchedule = async (req, res) => {
             .populate('site', 'siteName siteId siteAddress siteLocation stateName stateCode ledgerItems')
                .populate('operative', 'name phone')
             .populate('helpers', 'name phone')
-            .populate('vehicle', 'vehicleNumber vehicleName')
+            .populate('vehicle', 'vehicleNumber vehicleName vehiclePhotos')
             .populate('instruments', 'instrumentName serialNo model photo photos');
 
         broadcast('schedule-changed', { action: 'created', id: schedule._id });
@@ -161,7 +161,7 @@ const updateSchedule = async (req, res) => {
         // Only update fields that are actually provided
         const updates = {};
         const unsets = {};
-        const allowedFields = ['client', 'site', 'scheduleDate', 'workForAppley', 'operative', 'helpers', 'notes', 'status', 'dayStatus', 'ledger', 'amount', 'vehicle', 'instruments', 'scheduleType', 'endDate'];
+        const allowedFields = ['client', 'site', 'scheduleDate', 'workForAppley', 'operative', 'helpers', 'notes', 'status', 'dayStatus', 'ledger', 'amount', 'vehicle', 'instruments', 'scheduleType', 'endDate', 'assignmentChecklist'];
         allowedFields.forEach(field => {
             if (req.body[field] !== undefined) {
                 // If the field is an ObjectId field and is an empty string, set it to undefined/null
@@ -405,7 +405,7 @@ const updateSchedule = async (req, res) => {
             .populate('site', 'siteName siteId siteAddress siteLocation stateName stateCode ledgerItems contactPersons contactPhone')
             .populate('operative', 'name phone')
             .populate('helpers', 'name phone')
-            .populate('vehicle', 'vehicleNumber vehicleName')
+            .populate('vehicle', 'vehicleNumber vehicleName vehiclePhotos')
             .populate('instruments', 'instrumentName serialNo model photo photos');
 
         if (!schedule) {
@@ -788,7 +788,7 @@ const getSchedules = async (req, res) => {
             .populate('site', 'siteName siteId siteAddress siteLocation stateName stateCode ledgerItems contactPersons contactPhone')
             .populate('operative', 'name phone')
             .populate('helpers', 'name phone')
-            .populate('vehicle', 'vehicleNumber vehicleName')
+            .populate('vehicle', 'vehicleNumber vehicleName vehiclePhotos')
             .populate('instruments', 'instrumentName serialNo model photo photos')
             .sort({ scheduleDate: 1 })
             .lean(); // Use lean to allow modification

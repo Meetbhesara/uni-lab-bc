@@ -65,6 +65,10 @@ const ScheduleMasterSchema = new mongoose.Schema({
         type: mongoose.Schema.Types.ObjectId,
         ref: 'InstrumentMaster'
     }],
+    assignmentChecklist: {
+        type: mongoose.Schema.Types.Mixed,
+        default: {}
+    },
     scheduleType: {
         type: String,
         enum: ['VISIT', 'MONTH', 'TOPOGRAPHY SURVEY', 'POINT MARKING', ''],
