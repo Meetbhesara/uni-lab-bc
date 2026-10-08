@@ -12,9 +12,22 @@ const autoGenerateMonthSchedules = async () => {
         
         const cronCutoffDate = new Date('2026-06-01T00:00:00.000Z');
 
+        // Identify any MONTH groups that have been cancelled or deactivated
+        const cancelledGroups = await ScheduleMaster.distinct('monthGroupId', {
+            monthGroupId: { $ne: null },
+            $or: [
+                { contractCancelled: true },
+                { status: { $in: ['Deactive', 'deactive'] } }
+            ]
+        });
+        const cancelledGroupSet = new Set(cancelledGroups.map(Number));
+
         // Find all MONTH schedules that are active (not Paused or Rejected) and were scheduled in the past
         const activeMonthSchedules = await ScheduleMaster.find({
             scheduleType: 'MONTH',
+            contractCancelled: { $ne: true },
+            status: { $nin: ['Deactive', 'deactive'] },
+            monthGroupId: { $nin: Array.from(cancelledGroupSet) },
             dayStatus: { $nin: ['Paused', 'Rejected'] },
             scheduleDate: { $gte: cronCutoffDate, $lt: todayStart }
         }).sort({ scheduleDate: -1 });
@@ -22,7 +35,7 @@ const autoGenerateMonthSchedules = async () => {
         const processedGroups = new Set();
         
         for (const doc of activeMonthSchedules) {
-            if (!doc.monthGroupId || processedGroups.has(doc.monthGroupId)) continue;
+            if (!doc.monthGroupId || processedGroups.has(doc.monthGroupId) || cancelledGroupSet.has(Number(doc.monthGroupId))) continue;
             processedGroups.add(doc.monthGroupId); // Only process the latest schedule for each group
 
             if (!doc.endDate) continue;

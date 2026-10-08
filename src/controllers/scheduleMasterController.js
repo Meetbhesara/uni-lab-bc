@@ -1,4 +1,5 @@
 const ScheduleMaster = require('../models/ScheduleMaster');
+const User = require('../models/User');
 const SiteMaster = require('../models/SiteMaster');
 const ClientMaster = require('../models/ClientMaster');
 const EmployeeExpense = require('../models/EmployeeExpense');
@@ -639,16 +640,28 @@ const getSchedules = async (req, res) => {
             }
         }
 
-        // Auto-generate the next day for MONTH schedules (if not Paused/Rejected and within endDate)
+        // Auto-generate the next day for MONTH schedules (if not Paused/Rejected, within endDate, and contract not cancelled)
+        const cancelledGroups = await ScheduleMaster.distinct('monthGroupId', {
+            monthGroupId: { $ne: null },
+            $or: [
+                { contractCancelled: true },
+                { status: { $in: ['Deactive', 'deactive'] } }
+            ]
+        });
+        const cancelledGroupSet = new Set(cancelledGroups.map(Number));
+
         const activeMonthSchedules = await ScheduleMaster.find({
             scheduleType: 'MONTH',
+            contractCancelled: { $ne: true },
+            status: { $nin: ['Deactive', 'deactive'] },
+            monthGroupId: { $nin: Array.from(cancelledGroupSet) },
             dayStatus: { $nin: ['Paused', 'Rejected'] },
             scheduleDate: { $gte: cronCutoffDate, $lt: todayStart }
         }).sort({ scheduleDate: -1 });
 
         const processedGroups = new Set();
         for (const doc of activeMonthSchedules) {
-            if (!doc.monthGroupId || processedGroups.has(doc.monthGroupId)) continue;
+            if (!doc.monthGroupId || processedGroups.has(doc.monthGroupId) || cancelledGroupSet.has(Number(doc.monthGroupId))) continue;
             processedGroups.add(doc.monthGroupId); // Only process the latest schedule for each group
 
             if (!doc.endDate) continue;
@@ -726,6 +739,10 @@ const getSchedules = async (req, res) => {
         if (req.query.scheduleType) filter.scheduleType = req.query.scheduleType;
         if (req.query.workForAppley) filter.workForAppley = new RegExp(req.query.workForAppley, 'i');
         if (req.query.invoiceStatus) {
+            // Strictly exclude any cancelled contracts and rejected entries from all invoice queries
+            filter.contractCancelled = { $ne: true };
+            filter.status = { $nin: ['Deactive', 'deactive'] };
+            filter.dayStatus = { $nin: ['Rejected', 'Skipped'] };
             if (req.query.invoiceStatus === 'Pending') {
                 filter.proformaInvoiceId = { $in: [null, '', undefined] };
                 filter.finalInvoiceId = { $in: [null, '', undefined] };
@@ -995,11 +1012,83 @@ const completeSchedule = async (req, res) => {
     }
 };
 
+// PUT - Restore a rejected schedule back to Scheduled (Super Admin Only)
+const restoreRejectedSchedule = async (req, res) => {
+    try {
+        const { id } = req.params;
+
+        // Verify Super Admin
+        let isSuperAdmin = req.user?.isSuperAdmin;
+        if (!isSuperAdmin && req.user?.id) {
+            const user = await User.findById(req.user.id);
+            if (user?.isSuperAdmin) isSuperAdmin = true;
+        }
+
+        if (!isSuperAdmin) {
+            return res.status(403).json({
+                success: false,
+                message: 'Access denied. Only Super Admin can revert rejected schedules to scheduled.'
+            });
+        }
+
+        const schedule = await ScheduleMaster.findById(id);
+        if (!schedule) {
+            return res.status(404).json({ success: false, message: 'Schedule not found' });
+        }
+
+        const { restoreScope } = req.body; // 'day' | 'contract'
+
+        if (schedule.scheduleType === 'MONTH' && schedule.monthGroupId && restoreScope === 'contract') {
+            const updates = {
+                dayStatus: 'Scheduled',
+                rejectReason: null,
+                status: 'Active',
+                contractCancelled: false,
+                invoiceStatus: 'Pending'
+            };
+            if (req.body.endDate) {
+                updates.endDate = new Date(req.body.endDate);
+            }
+            await ScheduleMaster.updateMany(
+                { monthGroupId: schedule.monthGroupId },
+                { $set: updates }
+            );
+        } else {
+            schedule.dayStatus = 'Scheduled';
+            schedule.rejectReason = null;
+            schedule.status = 'Active';
+            schedule.contractCancelled = false;
+            if (schedule.invoiceStatus === 'Closed') {
+                schedule.invoiceStatus = 'Pending';
+            }
+            if (req.body.endDate) {
+                schedule.endDate = new Date(req.body.endDate);
+            }
+            await schedule.save({ validateBeforeSave: false });
+        }
+
+        broadcast('schedule-changed', {
+            action: 'restored',
+            id: schedule._id,
+            monthGroupId: schedule.monthGroupId
+        });
+
+        res.json({
+            success: true,
+            message: 'Schedule restored to Scheduled and remark cleared successfully.',
+            data: schedule
+        });
+    } catch (error) {
+        console.error('Error in restoreRejectedSchedule:', error);
+        res.status(500).json({ success: false, message: error.message });
+    }
+};
+
 // PUT - Reject a schedule
 const rejectSchedule = async (req, res) => {
     try {
         const { id } = req.params;
-        const { rejectReason } = req.body;
+        const { rejectReason, rejectScope, password } = req.body;
 
         if (!rejectReason || !rejectReason.trim()) {
             return res.status(400).json({ success: false, message: 'Rejection reason is required.' });
@@ -1010,7 +1099,80 @@ const rejectSchedule = async (req, res) => {
             return res.status(404).json({ success: false, message: 'Schedule not found' });
         }
 
+        const trimmedReason = rejectReason.trim();
+
         // -------------------------------------------------------------------------
+        // Entire Monthly Contract Cancellation Flow
+        // Only allowed for MONTH type schedules, requires exact password 'Dskanak@1966'
+        // -------------------------------------------------------------------------
+        const isEntireCancel = schedule.scheduleType === 'MONTH' && rejectScope === 'entire';
+
+        if (isEntireCancel) {
+            if (password !== 'Dskanak@1966') {
+                return res.status(403).json({
+                    success: false,
+                    message: 'Invalid security password. Please enter the correct password to cancel the entire contract.'
+                });
+            }
+
+            const todayEnd = new Date();
+            todayEnd.setHours(23, 59, 59, 999);
+            const yesterdayDate = new Date();
+            yesterdayDate.setDate(yesterdayDate.getDate() - 1);
+
+            if (schedule.monthGroupId) {
+                // Delete any future generated schedules beyond today for this group
+                await ScheduleMaster.deleteMany({
+                    monthGroupId: schedule.monthGroupId,
+                    scheduleDate: { $gt: todayEnd }
+                });
+
+                // Update all remaining schedules for this contract to mark cancelled, deactivated, closed from invoices
+                await ScheduleMaster.updateMany({
+                    monthGroupId: schedule.monthGroupId
+                }, {
+                    $set: {
+                        dayStatus: 'Rejected',
+                        status: 'Deactive',
+                        invoiceStatus: 'Closed',
+                        contractCancelled: true,
+                        rejectReason: trimmedReason,
+                        endDate: yesterdayDate,
+                        operative: null,
+                        helpers: [],
+                        vehicle: null,
+                        instruments: []
+                    }
+                });
+            } else {
+                schedule.dayStatus = 'Rejected';
+                schedule.status = 'Deactive';
+                schedule.invoiceStatus = 'Closed';
+                schedule.contractCancelled = true;
+                schedule.rejectReason = trimmedReason;
+                schedule.endDate = yesterdayDate;
+                schedule.operative = null;
+                schedule.helpers = [];
+                schedule.vehicle = null;
+                schedule.instruments = [];
+                await schedule.save({ validateBeforeSave: false });
+            }
+
+            broadcast('schedule-changed', {
+                action: 'contract-cancelled',
+                id: schedule._id,
+                monthGroupId: schedule.monthGroupId
+            });
+
+            return res.json({
+                success: true,
+                message: 'Entire monthly contract has been cancelled successfully. Future generations stopped and excluded from all invoices.',
+                data: schedule
+            });
+        }
+
+        // -------------------------------------------------------------------------
+        // Standard single-day rejection (Today Only or non-MONTH schedule)
         // RESTRICTION: Do not allow rejecting a schedule if daily expenses
         // or client/site data (photos, report, drawing, data) already exist.
         // -------------------------------------------------------------------------
@@ -1760,6 +1922,7 @@ module.exports = {
     getLastAssignment,
     completeSchedule,
     rejectSchedule,
+    restoreRejectedSchedule,
     updateInvoiceStatus,
     generateSchedulerInvoice,
     pauseMonth,

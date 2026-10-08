@@ -84,6 +84,10 @@ const ScheduleMasterSchema = new mongoose.Schema({
     endDate: {
         type: Date
     },
+    contractCancelled: {
+        type: Boolean,
+        default: false
+    },
     status: {
         type: String,
         enum: ['Active', 'Deactive', 'active', 'deactive'],
@@ -189,6 +193,7 @@ ScheduleMasterSchema.index({ nextFollowUp: 1 });
 ScheduleMasterSchema.index({ status: 1, scheduleDate: -1 });
 // 6. Month group schedules (MONTH type schedules)
 ScheduleMasterSchema.index({ monthGroupId: 1 });
+ScheduleMasterSchema.index({ contractCancelled: 1 });
 
 
 

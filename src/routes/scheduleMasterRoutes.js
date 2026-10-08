@@ -14,6 +14,7 @@ const {
     updateSchedule,
     completeSchedule,
     rejectSchedule,
+    restoreRejectedSchedule,
     updateInvoiceStatus,
     generateSchedulerInvoice,
     pauseMonth,
@@ -138,6 +139,7 @@ router.post('/complete/:id', upload.fields([
 
 // PUT /api/schedule-master/reject/:id (Reject a schedule)
 router.put('/reject/:id', rejectSchedule);
+router.put('/restore-rejected/:id', auth, restoreRejectedSchedule);
 
 // PATCH /api/schedule-master/invoice-status/:id (Update invoice bill status)
 router.patch('/invoice-status/:id', updateInvoiceStatus);

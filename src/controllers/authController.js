@@ -32,6 +32,18 @@ const recordAdminLogin = async (user, req) => {
         const istDate = new Date(now.getTime() + istOffset);
         const dateStr = istDate.toISOString().split('T')[0];
 
+        // Auto-close any prior unclosed session from today with its lastActiveAt
+        const priorOpenSession = await AdminLoginLog.findOne({
+            userId: user._id || user.id,
+            dateStr: dateStr,
+            logoutAt: { $exists: false }
+        }).sort({ loginAt: -1 });
+
+        if (priorOpenSession) {
+            priorOpenSession.logoutAt = priorOpenSession.lastActiveAt || now;
+            await priorOpenSession.save();
+        }
+
         const ip = req ? (req.headers['x-forwarded-for'] || req.socket?.remoteAddress || '') : '';
 
         await AdminLoginLog.create({
@@ -127,11 +139,8 @@ const getMe = async (req, res) => {
             const existingToday = await AdminLoginLog.findOne({ userId: user._id, dateStr }).sort({ loginAt: -1 });
             if (!existingToday) {
                 await recordAdminLogin(user, req);
-            } else {
+            } else if (!existingToday.logoutAt) {
                 existingToday.lastActiveAt = now;
-                if (existingToday.logoutAt) {
-                    existingToday.logoutAt = undefined;
-                }
                 await existingToday.save();
             }
         }
@@ -502,7 +511,7 @@ const verifyAdminOtp = async (req, res) => {
 };
 
 const createAdmin = async (req, res) => {
-    const { name, email, phone } = req.body;
+    const { name, email, phone, permissions, isSuperAdmin } = req.body;
 
     if (!name || !email || !phone) {
         return res.status(400).json({ msg: 'Please enter all fields' });
@@ -648,7 +657,7 @@ const resetWithBackupCode = async (req, res) => {
 
 const getAdmins = async (req, res) => {
     try {
-        const admins = await User.find({ isAdmin: true }).select('-password -twoFactorSecret');
+        const admins = await User.find({ $or: [{ isAdmin: true }, { isSuperAdmin: true }] }).select('-password -twoFactorSecret');
         res.json(admins);
     } catch (err) {
         console.error(err.message);
@@ -666,6 +675,36 @@ const getUsers = async (req, res) => {
     } catch (err) {
         console.error(err.message);
         res.status(500).send('Server Error');
+    }
+};
+
+
+const updateAdmin = async (req, res) => {
+    try {
+        const { name, email, phone, isSuperAdmin, permissions } = req.body;
+        const user = await User.findById(req.params.id);
+        if (!user || (!user.isAdmin && !user.isSuperAdmin)) {
+            return res.status(404).json({ success: false, msg: 'Admin not found' });
+        }
+
+        if (name !== undefined) user.name = name;
+        if (email !== undefined) user.email = email;
+        if (phone !== undefined) user.phone = phone;
+        if (isSuperAdmin !== undefined) {
+            user.isSuperAdmin = Boolean(isSuperAdmin);
+            if (user.isSuperAdmin) {
+                user.isAdmin = true;
+            }
+        }
+        if (permissions !== undefined) {
+            user.permissions = permissions;
+        }
+
+        await user.save();
+        res.json({ success: true, msg: 'Admin updated successfully', user });
+    } catch (err) {
+        console.error('Update admin error:', err.message);
+        res.status(500).json({ success: false, msg: 'Server Error' });
     }
 };
 
@@ -811,6 +850,7 @@ const getAdminLoginReport = async (req, res) => {
                 let firstLogin = '-';
                 let lastLogin = '-';
                 let loginCount = 0;
+                let sessions = [];
 
                 if (d <= evaluateUpToDay) {
                     const adminCreatedDateStr = admin.createdAt ? new Date(new Date(admin.createdAt).getTime() + istOffset).toISOString().slice(0, 10) : '2000-01-01';
@@ -843,6 +883,45 @@ const getAdminLoginReport = async (req, res) => {
                         }
 
                         lastLogin = logoutTimeStr;
+
+                        // Detailed session mapping
+                        sessions = dayLogs.map((l, idx) => {
+                            const hasExplicitLogout = !!l.logoutAt;
+                            const isCurrentActive = (!hasExplicitLogout && fullDateStr === istDate.toISOString().split('T')[0] && idx === dayLogs.length - 1);
+                            let sessLogout = '-';
+                            if (hasExplicitLogout) {
+                                sessLogout = formatT(l.logoutAt);
+                            } else if (isCurrentActive) {
+                                sessLogout = 'Active (Logged In)';
+                            } else if (l.lastActiveAt) {
+                                sessLogout = formatT(l.lastActiveAt);
+                            }
+
+                            let sessDuration = '—';
+                            try {
+                                const startMs = new Date(l.loginAt).getTime();
+                                const endMs = hasExplicitLogout 
+                                    ? new Date(l.logoutAt).getTime() 
+                                    : (isCurrentActive ? Date.now() : (l.lastActiveAt ? new Date(l.lastActiveAt).getTime() : startMs));
+                                if (!isNaN(startMs) && !isNaN(endMs) && endMs >= startMs) {
+                                    const diffMin = Math.round((endMs - startMs) / 60000);
+                                    const hrs = Math.floor(diffMin / 60);
+                                    const mins = diffMin % 60;
+                                    sessDuration = hrs > 0 ? (hrs + "h " + mins + "m") : (mins + "m");
+                                }
+                            } catch (e) {}
+                            return {
+                                sessionNumber: idx + 1,
+                                loginTime: formatT(l.loginAt),
+                                logoutTime: sessLogout,
+                                rawLoginAt: l.loginAt,
+                                rawLogoutAt: l.logoutAt,
+                                rawLastActiveAt: l.lastActiveAt,
+                                isActive: isCurrentActive,
+                                duration: sessDuration,
+                                ipAddress: l.ipAddress || ''
+                            };
+                        });
                     } else {
                         status = 'Absent';
                         absentDays++;
@@ -856,7 +935,8 @@ const getAdminLoginReport = async (req, res) => {
                     firstLogin,
                     lastLogin,
                     logoutTime: lastLogin,
-                    loginCount
+                    loginCount,
+                    sessions
                 });
             }
 
@@ -972,5 +1052,6 @@ const deleteAccount = async (req, res) => {
     }
 };
 
-module.exports = { register, login, phoneLogin, phoneRegister, getUserByPhone, sendOtp, verifyOtp, sendAdminOtp, verifyAdminOtp, createAdmin, setup2FA, verifyAndEnable2FA, loginWith2FA, resetWithBackupCode, getAdmins, updateAdminPermissions, getMe, getUsers, getGeofenceSettings, updateGeofenceSettings, getAdminLoginReport, logout, deleteAccount };
+module.exports = {
+  updateAdmin, register, login, phoneLogin, phoneRegister, getUserByPhone, sendOtp, verifyOtp, sendAdminOtp, verifyAdminOtp, createAdmin, setup2FA, verifyAndEnable2FA, loginWith2FA, resetWithBackupCode, getAdmins, updateAdminPermissions, getMe, getUsers, getGeofenceSettings, updateGeofenceSettings, getAdminLoginReport, logout, deleteAccount };
 
