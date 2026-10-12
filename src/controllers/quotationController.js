@@ -31,6 +31,7 @@ const getNextRefNo = async () => {
 };
 
 const User = require('../models/User'); // Import User model
+const { addToGoogleContacts } = require('../utils/googleContacts');
 
 const createQuotation = async (req, res) => {
     try {
@@ -133,6 +134,32 @@ const createQuotation = async (req, res) => {
         });
 
         const saved = await newQuotation.save();
+
+        // Automatic Google Contacts Sync (with duplicate check & detailed logs)
+        try {
+            const targetPhone = phone || (enquiry && enquiry.phone);
+            const targetName = (contactPerson && contactPerson.trim())
+                || (partyName && partyName.trim())
+                || (enquiry && enquiry.contactPersonName && enquiry.contactPersonName.trim())
+                || (enquiry && enquiry.companyName && enquiry.companyName.trim())
+                || 'Client';
+            const targetEmail = email || (enquiry && enquiry.email);
+            const targetCompany = partyName || (enquiry && enquiry.companyName) || '';
+
+            if (targetPhone && targetPhone !== 'N/A') {
+                addToGoogleContacts({
+                    name: targetName,
+                    phone: targetPhone,
+                    email: targetEmail,
+                    company: targetCompany,
+                    source: 'Quotation Creation'
+                }).catch(err => {
+                    console.error('[Google Contacts Error in Quotation]:', err.message);
+                });
+            }
+        } catch (syncErr) {
+            console.error('[Google Contacts Error in Quotation]:', syncErr.message);
+        }
         res.json(saved);
     } catch (err) {
         console.error(err.message);

@@ -2,6 +2,7 @@ const express = require('express');
 const router = express.Router();
 const { sendWhatsapp, sendWhatsappMedia, getStatus, initialize, disconnect } = require('../utils/whatsappService');
 const auth = require('../middlewares/auth');
+const { addToGoogleContacts } = require('../utils/googleContacts');
 
 // WhatsApp Session Management Routes
 router.get('/status', auth, (req, res) => {
@@ -138,6 +139,19 @@ router.post('/send-product', auth, async (req, res) => {
         } else {
             await sendWhatsapp(phone, caption, null);
         }
+        // Automatic Google Contacts Sync
+        const singleClientName = (user && user.name) || 'WhatsApp Client';
+        const singleEmail = user && user.email && !user.email.endsWith('@gmail.com') ? user.email : '';
+        addToGoogleContacts({
+            name: singleClientName,
+            phone: phone,
+            email: singleEmail,
+            company: (user && user.companyName) || '',
+            source: 'WhatsApp Single Product'
+        }).catch(err => {
+            console.error('[Google Contacts WhatsApp Send Error]:', err.message);
+        });
+
         res.status(200).json({ success: true, msg: 'WhatsApp product sent!' });
     } catch (e) {
         res.status(500).json({ success: false, error: e.message });
@@ -247,6 +261,23 @@ router.post('/send-multiple-products', auth, async (req, res) => {
         });
         await enquiry.save();
         console.log('[WhatsApp] Log entry created in DB for ' + phone + ' (enquiry ID: ' + enquiry._id + ')');
+
+        // 4. Automatic Google Contacts Sync (checks if phone already exists)
+        const clientName = (contactPersonName && contactPersonName.trim()) 
+            || (companyName && companyName.trim()) 
+            || 'WhatsApp Client';
+
+        const cleanEmail = targetEmail && !targetEmail.endsWith('@gmail.com') ? targetEmail : (email || '');
+
+        addToGoogleContacts({
+            name: clientName,
+            phone: phone,
+            email: cleanEmail,
+            company: companyName || '',
+            source: 'WhatsApp Product Share'
+        }).catch(err => {
+            console.error('[Google Contacts WhatsApp Sync Error]:', err.message);
+        });
 
         res.status(200).json({ success: true, msg: 'WhatsApp products sent successfully!', enquiry });
     } catch (e) {

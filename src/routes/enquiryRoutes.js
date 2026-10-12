@@ -3,6 +3,7 @@ const router = express.Router();
 const Enquiry = require('../models/Enquiry');
 const User = require('../models/User');
 const Cart = require('../models/Cart');
+const { addToGoogleContacts } = require('../utils/googleContacts');
 
 // Create enquiry
 router.post('/', async (req, res) => {
@@ -50,6 +51,21 @@ router.post('/', async (req, res) => {
             status: status || 'Pending'
         });
         await enquiry.save();
+
+        // 5. Automatic Google Contacts Sync (with duplicate check & detailed logs)
+        const clientName = (contactPersonName && contactPersonName.trim()) 
+            || (companyName && companyName.trim()) 
+            || 'Enquiry Client';
+
+        addToGoogleContacts({
+            name: clientName,
+            phone: phone,
+            email: email,
+            company: companyName || '',
+            source: 'Product Enquiry'
+        }).catch(err => {
+            console.error('[Google Contacts Error in Enquiry]:', err.message);
+        });
 
         // 4. Clear ALL cart documents related to this enquiry
         const { sessionId } = req.body;
