@@ -1,8 +1,9 @@
-﻿const ClientMaster = require('../models/ClientMaster');
+const ClientMaster = require('../models/ClientMaster');
 const Counter = require('../models/Counter');
 const path = require('path');
 const fs = require('fs');
 const { broadcast } = require('../utils/sseManager');
+const { addToGoogleContacts } = require('../utils/googleContacts');
 
 const parseContactNumbers = (input) => {
     if (!input) return [];
@@ -27,7 +28,7 @@ const parseEmails = (input) => {
         if (Array.isArray(parsed)) return parsed.map(s => s.trim().toLowerCase()).filter(Boolean);
     } catch (e) { }
     if (typeof input === 'string') {
-        return input.split(',').map(x => x.trim().toLowerCase()).filter(Boolean);
+        return input.split(',').map(s => s.trim().toLowerCase()).filter(Boolean);
     }
     if (Array.isArray(input)) {
         return input.map(s => s.trim().toLowerCase()).filter(Boolean);
@@ -147,6 +148,32 @@ const storeClientMaster = async (req, res) => {
 
         broadcast('client-changed', { action: 'created' });
 
+        // Sync to Google Contacts (asynchronous, non-blocking)
+        const contactDisplayName = (contactPersonName && contactPersonName.trim()) 
+            || (clientName && clientName.trim()) 
+            || 'Client';
+
+        const clientPhones = [
+            contactPersonPhone,
+            ...(Array.isArray(record.contactNumbers) ? record.contactNumbers : [])
+        ].filter(Boolean);
+
+        addToGoogleContacts({
+            name: contactDisplayName,
+            phones: clientPhones,
+            emails: finalEmails,
+            company: (clientName && clientName.trim()) || '',
+            address: {
+                street: clientAddress || '',
+                pincode: pincode || '',
+                state: state || ''
+            },
+            gstNumber: gstNo || '',
+            source: 'Client Master'
+        }).catch(err => {
+            console.error('[Google Contacts Client Master Sync Error]:', err.message);
+        });
+
         res.status(201).json({ success: true, message: 'Client record stored successfully', data: record });
 
     } catch (error) {
@@ -242,6 +269,11 @@ const updateClientMaster = async (req, res) => {
             }
         }
 
+                const previousPhones = [
+            oldRecord.contactPerson && oldRecord.contactPerson.phone,
+            ...(Array.isArray(oldRecord.contactNumbers) ? oldRecord.contactNumbers : [])
+        ].filter(Boolean);
+
         if (contactPersonName !== undefined || contactPersonPhone !== undefined) {
             oldRecord.contactPerson = {
                 name: contactPersonName !== undefined ? contactPersonName : (oldRecord.contactPerson || {}).name,
@@ -277,6 +309,34 @@ const updateClientMaster = async (req, res) => {
 
         await oldRecord.save();
         broadcast('client-changed', { action: 'updated' });
+
+        // Sync to Google Contacts on update (asynchronous, non-blocking)
+        const updatedDisplayName = (oldRecord.contactPerson && oldRecord.contactPerson.name && oldRecord.contactPerson.name.trim()) 
+            || (oldRecord.clientName && oldRecord.clientName.trim()) 
+            || 'Client';
+
+        const updatedPhones = [
+            oldRecord.contactPerson && oldRecord.contactPerson.phone,
+            ...(Array.isArray(oldRecord.contactNumbers) ? oldRecord.contactNumbers : [])
+        ].filter(Boolean);
+
+        addToGoogleContacts({
+            name: updatedDisplayName,
+            phones: updatedPhones,
+            oldPhones: previousPhones,
+            emails: oldRecord.emails && oldRecord.emails.length > 0 ? oldRecord.emails : (oldRecord.email ? [oldRecord.email] : []),
+            company: (oldRecord.clientName && oldRecord.clientName.trim()) || '',
+            address: {
+                street: oldRecord.clientAddress || '',
+                pincode: oldRecord.pincode || '',
+                state: oldRecord.state || ''
+            },
+            gstNumber: oldRecord.gstNo || '',
+            source: 'Client Master Update'
+        }).catch(err => {
+            console.error('[Google Contacts Client Master Update Error]:', err.message);
+        });
+
         res.json({ success: true, message: 'Client updated successfully', data: oldRecord });
     } catch (error) {
         console.error('Error in updateClientMaster:', error);

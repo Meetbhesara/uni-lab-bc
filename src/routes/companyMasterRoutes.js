@@ -35,7 +35,7 @@ const storage = multer.diskStorage({
 
 const upload = multer({
     storage,
-    limits: { fileSize: 10 * 1024 * 1024 }, // 10MB limit
+    limits: { fileSize: 15 * 1024 * 1024 }, // 15MB limit
     fileFilter: (req, file, cb) => {
         const allowedExts = /pdf|jpeg|jpg|png|webp|svg/;
         const extname = allowedExts.test(path.extname(file.originalname).toLowerCase());
@@ -53,7 +53,9 @@ const companyUploadFields = upload.fields([
     { name: 'panCardDoc', maxCount: 1 },
     { name: 'gstDoc', maxCount: 1 },
     { name: 'cancelledChequeDoc', maxCount: 1 },
-    { name: 'companyStamp', maxCount: 1 }
+    { name: 'companyStamp', maxCount: 1 },
+    { name: 'otherDoc', maxCount: 1 },
+    { name: 'otherDocs', maxCount: 50 } // allow multiple other documents
 ]);
 
 router.post('/', companyUploadFields, storeCompany);

@@ -7,6 +7,12 @@ const bankDetailsSchema = new mongoose.Schema({
     ifscCode: { type: String, trim: true },
 });
 
+const otherDocItemSchema = new mongoose.Schema({
+    title: { type: String, trim: true, default: 'Other Document' },
+    url: { type: String, required: true },
+    uploadedAt: { type: Date, default: Date.now }
+});
+
 const companyMasterSchema = new mongoose.Schema({
     companyName: { type: String, required: true, trim: true },
     address: { type: String, trim: true },
@@ -24,7 +30,10 @@ const companyMasterSchema = new mongoose.Schema({
     panCardDoc: { type: String }, // Path to uploaded PAN Card PDF/Photo
     gstDoc: { type: String }, // Path to uploaded GST Certificate PDF/Photo
     cancelledChequeDoc: { type: String }, // Path to uploaded Cancelled Cheque PDF/Photo
-    companyStamp: { type: String } // Path to uploaded Company Stamp Photo/Image
+    companyStamp: { type: String },
+    otherDoc: { type: String },
+    otherDocTitle: { type: String, trim: true },
+    otherDocs: { type: [otherDocItemSchema], default: [] }
 }, { timestamps: true });
 
 module.exports = mongoose.model('CompanyMaster', companyMasterSchema);

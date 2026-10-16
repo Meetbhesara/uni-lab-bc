@@ -147,8 +147,108 @@ const createSchedule = async (req, res) => {
             .populate('vehicle', 'vehicleNumber vehicleName vehiclePhotos')
             .populate('instruments', 'instrumentName serialNo model photo photos');
 
+        let whatsappSentCount = 0;
+        let whatsappFailedCount = 0;
+        let whatsappErrors = [];
+
+        // Send WhatsApp Assignment on creation if operative/helpers assigned
+        if (populated && populated.operative && populated.operative.phone) {
+            try {
+                const siteName = populated.site?.siteName || 'N/A';
+                const rawLocation = populated.site?.siteLocation || '';
+                let location = populated.site?.siteAddress || 'N/A';
+                if (rawLocation && rawLocation.includes(',')) {
+                    const [lat, lng] = rawLocation.split(',').map(s => s.trim());
+                    if (lat && lng) location = `https://maps.google.com/?q=${lat},${lng}`;
+                } else if (rawLocation) {
+                    location = rawLocation;
+                }
+                
+                let contactPerson = 'N/A';
+                if (populated.site?.contactPersons && populated.site.contactPersons.length > 0) {
+                    contactPerson = populated.site.contactPersons[0].name || 'N/A';
+                }
+                
+                let contactPhone = populated.site?.contactPhone || 'N/A';
+                if (contactPhone === 'N/A' && populated.site?.contactPersons && populated.site.contactPersons.length > 0) {
+                    contactPhone = populated.site.contactPersons[0].phone || 'N/A';
+                }
+                
+                const helpers = (populated.helpers && populated.helpers.length > 0) ? populated.helpers.map(h => h.name || 'Unknown').join(', ') : 'None';
+                const vehicle = populated.vehicle ? `${populated.vehicle.vehicleNumber || ''} - ${populated.vehicle.vehicleName || ''}`.replace(/^- | -$/, '').trim() : 'None';
+                const instruments = (populated.instruments && populated.instruments.length > 0) ? populated.instruments.map(i => i.instrumentName || i.serialNo || 'Unknown').join(', ') : 'None';
+                
+                let msg = `*Work Assignment*\n\n`;
+                if (populated.scheduleDate) {
+                    msg += `*Date:* ${new Date(populated.scheduleDate).toLocaleDateString('en-GB')}\n`;
+                }
+                msg += `*Site Name:* ${siteName}\n`;
+                msg += `*Location:* ${location}\n`;
+                msg += `*Contact Person:* ${contactPerson}\n`;
+                msg += `*Contact No:* ${contactPhone}\n`;
+                msg += `*Helpers:* ${helpers}\n`;
+                msg += `*Vehicle:* ${vehicle}\n`;
+                msg += `*Instruments:* ${instruments}\n`;
+                
+                await sendWhatsapp(populated.operative.phone, msg, req.user?.id);
+                whatsappSentCount++;
+            } catch (whatsappErr) {
+                console.error('[WhatsApp] Failed to send assignment message on create:', whatsappErr.message);
+                whatsappFailedCount++;
+                whatsappErrors.push(whatsappErr.message);
+            }
+        }
+
+        if (populated && populated.helpers && populated.helpers.length > 0) {
+            const siteName = populated.site?.siteName || 'N/A';
+            const rawLocation = populated.site?.siteLocation || '';
+            let location = populated.site?.siteAddress || 'N/A';
+            if (rawLocation && rawLocation.includes(',')) {
+                const [lat, lng] = rawLocation.split(',').map(s => s.trim());
+                if (lat && lng) location = `https://maps.google.com/?q=${lat},${lng}`;
+            } else if (rawLocation) {
+                location = rawLocation;
+            }
+            const schedDate = populated.scheduleDate
+                ? new Date(populated.scheduleDate).toLocaleDateString('en-GB')
+                : 'N/A';
+            const operativeName = populated.operative?.name || 'N/A';
+
+            for (const helper of populated.helpers) {
+                if (!helper?.phone) continue;
+                try {
+                    let helperMsg = `*Work Assignment (Helper)*\n\n`;
+                    helperMsg += `Hi ${helper.name},\n`;
+                    helperMsg += `You have been assigned as a *Helper* for the following visit:\n\n`;
+                    helperMsg += `*Date:* ${schedDate}\n`;
+                    helperMsg += `*Site Name:* ${siteName}\n`;
+                    helperMsg += `*Location:* ${location}\n`;
+                    helperMsg += `*Team Leader (Operative):* ${operativeName}\n`;
+                    helperMsg += `\nPlease report on time. Contact admin if you have any questions.`;
+
+                    await sendWhatsapp(helper.phone, helperMsg, req.user?.id);
+                    whatsappSentCount++;
+                } catch (helperWaErr) {
+                    console.error(`[WhatsApp] Failed to send helper assignment to ${helper.name}:`, helperWaErr.message);
+                    whatsappFailedCount++;
+                    whatsappErrors.push(helperWaErr.message);
+                }
+            }
+        }
+
+        const hasAssignments = Boolean(populated.operative?.phone || (populated.helpers && populated.helpers.some(h => h.phone)));
+        const whatsappSent = hasAssignments ? (whatsappSentCount > 0) : false;
+
         broadcast('schedule-changed', { action: 'created', id: schedule._id });
-        res.status(201).json({ success: true, message: 'Schedule created successfully', data: populated });
+        res.status(201).json({ 
+            success: true, 
+            message: 'Schedule created successfully', 
+            data: populated,
+            whatsappSent,
+            whatsappSentCount,
+            whatsappFailedCount,
+            whatsappErrors
+        });
     } catch (error) {
         console.error('Error in createSchedule:', error);
         res.status(500).json({ success: false, message: error.message });
@@ -470,6 +570,9 @@ const updateSchedule = async (req, res) => {
         }
 
         // WhatsApp Assignment Notifications
+        let whatsappSentCount = 0;
+        let whatsappFailedCount = 0;
+        let whatsappErrors = [];
         
         // 1. Send Cancellation to Old Operative (if changed)
         if (cancelledOperative && cancelledOperative.phone) {
@@ -539,8 +642,11 @@ if (rawLocation && rawLocation.includes(',')) {
                 msg += `*Instruments:* ${instruments}\n`;
                 
                 await sendWhatsapp(schedule.operative.phone, msg, req.user?.id);
+                whatsappSentCount++;
             } catch (whatsappErr) {
                 console.error('[WhatsApp] Failed to send assignment message:', whatsappErr.message);
+                whatsappFailedCount++;
+                whatsappErrors.push(whatsappErr.message);
             }
         }
 
@@ -573,14 +679,28 @@ if (rawLocation && rawLocation.includes(',')) {
                     helperMsg += `\nPlease report on time. Contact admin if you have any questions.`;
 
                     await sendWhatsapp(helper.phone, helperMsg, req.user?.id);
+                    whatsappSentCount++;
                 } catch (helperWaErr) {
                     console.error(`[WhatsApp] Failed to send helper assignment to ${helper.name}:`, helperWaErr.message);
+                    whatsappFailedCount++;
+                    whatsappErrors.push(helperWaErr.message);
                 }
             }
         }
 
+        const hasAssignedTeam = Boolean(schedule.operative?.phone || (schedule.helpers && schedule.helpers.some(h => h.phone)));
+        const whatsappSent = hasAssignedTeam ? (whatsappSentCount > 0) : false;
+
         broadcast('schedule-changed', { action: 'updated', id: schedule._id });
-        res.json({ success: true, message: 'Schedule updated successfully', data: schedule });
+        res.json({ 
+            success: true, 
+            message: 'Schedule updated successfully', 
+            data: schedule,
+            whatsappSent,
+            whatsappSentCount,
+            whatsappFailedCount,
+            whatsappErrors
+        });
     } catch (error) {
         console.error('Error in updateSchedule:', error);
         res.status(500).json({ success: false, message: error.message });

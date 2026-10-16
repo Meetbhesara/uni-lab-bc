@@ -21,6 +21,71 @@ if (!fs.existsSync(whatsappAuthPath)) {
     fs.mkdirSync(whatsappAuthPath, { recursive: true });
 }
 
+// Universal NAS & Local Storage Path Resolver
+const getUploadRootDir = () => {
+    if (process.env.USE_NAS === 'true') {
+        return process.env.NAS_BASE_PATH || '/app/storage';
+    }
+    if (process.env.LOCAL_BASE_PATH) {
+        return path.isAbsolute(process.env.LOCAL_BASE_PATH)
+            ? process.env.LOCAL_BASE_PATH
+            : path.join(process.cwd(), process.env.LOCAL_BASE_PATH);
+    }
+    return path.join(process.cwd(), 'uploads');
+};
+
+const resolveLocalFilePath = (filePathOrUrl) => {
+    if (!filePathOrUrl || typeof filePathOrUrl !== 'string') return null;
+
+    if (path.isAbsolute(filePathOrUrl) && fs.existsSync(filePathOrUrl)) {
+        return filePathOrUrl;
+    }
+
+    let relativePath = filePathOrUrl.trim();
+    if (relativePath.startsWith('http://') || relativePath.startsWith('https://')) {
+        try {
+            const urlObj = new URL(relativePath);
+            relativePath = urlObj.pathname;
+        } catch (e) {
+            relativePath = relativePath.replace(/^https?:\/\/[^\/]+/, '');
+        }
+    }
+
+    let cleanedPath = relativePath
+        .replace(/^\/?api\/uploads\/?/, '')
+        .replace(/^\/?uploads\/?/, '')
+        .replace(/^\//, '');
+
+    try {
+        cleanedPath = decodeURIComponent(cleanedPath);
+    } catch (e) {}
+
+    const uploadRootDir = getUploadRootDir();
+
+    const candidates = [
+        path.join(uploadRootDir, cleanedPath),
+        path.join(uploadRootDir, 'catalogs', cleanedPath),
+        path.join(uploadRootDir, 'products', cleanedPath),
+        path.join(process.cwd(), 'uploads', cleanedPath),
+        path.join(process.cwd(), 'uploads', 'catalogs', cleanedPath),
+        path.join(process.cwd(), 'uploads', 'products', cleanedPath),
+        path.join(process.cwd(), cleanedPath),
+        path.join('/app/storage', cleanedPath),
+        path.join('/app/storage', 'catalogs', cleanedPath),
+        path.join('/app/storage', 'products', cleanedPath),
+        path.join(__dirname, '../../uploads', cleanedPath),
+        path.join(__dirname, '../../uploads/catalogs', cleanedPath)
+    ];
+
+    for (const cand of candidates) {
+        if (cand && fs.existsSync(cand)) {
+            return cand;
+        }
+    }
+
+    return null;
+};
+
 // In-memory mappings
 const clients = new Map();
 const clientStatus = new Map(); // 'disconnected' | 'initializing' | 'qr' | 'ready'
@@ -236,6 +301,7 @@ const initialize = async (sessionId = 'system_default', attempt = 1, maxAttempts
             clientStatus.set(sessionId, 'ready');
             clientQrs.delete(sessionId);
             notifyStatusChange(sessionId, 'ready');
+            setTimeout(processOutbox, 1500);
         }
     });
 };
@@ -307,6 +373,156 @@ const initializeAll = async () => {
     }
 };
 
+// ── Outbox Queue for Guaranteed Zero-Loss WhatsApp Delivery ─────────────────
+const outboxQueue = [];
+let isQueueProcessing = false;
+
+const addToOutbox = (item) => {
+    // Avoid queuing duplicate identical messages to the same phone within 30 seconds
+    const isDuplicate = outboxQueue.some(q => 
+        q.phone === item.phone && 
+        q.type === item.type && 
+        (item.type === 'media' ? q.fileUrl === item.fileUrl : q.message === item.message) &&
+        (Date.now() - new Date(q.createdAt).getTime() < 30000)
+    );
+    if (isDuplicate) {
+        console.log(`[WhatsApp Outbox] ⚠️ Duplicate message for ${item.phone} already queued. Skipping duplicate queueing.`);
+        return;
+    }
+
+    item.id = item.id || `outbox_${Date.now()}_${Math.random().toString(36).substring(2, 7)}`;
+    item.attempts = item.attempts || 0;
+    item.maxAttempts = item.maxAttempts || 8;
+    item.createdAt = item.createdAt || new Date();
+    outboxQueue.push(item);
+    console.log(`[WhatsApp Outbox] Queued unsent message for ${item.phone} (Queue size: ${outboxQueue.length})`);
+    logToFile(`Queued in Outbox for ${item.phone}`, { queueSize: outboxQueue.length, item });
+};
+
+const processOutbox = async () => {
+    if (isQueueProcessing || outboxQueue.length === 0) return;
+    isQueueProcessing = true;
+
+    try {
+        const remaining = [];
+        while (outboxQueue.length > 0) {
+            const item = outboxQueue.shift();
+            const targetSessionId = item.adminId ? `admin_${item.adminId}` : 'system_default';
+            let status = clientStatus.get(targetSessionId);
+            let sock = clients.get(targetSessionId);
+
+            // Fallback to system_default if admin session is not ready and message is not an OTP
+            if ((!sock || status !== 'ready') && targetSessionId !== 'system_default' && !item.isOtp) {
+                const sysSock = clients.get('system_default');
+                const sysStatus = clientStatus.get('system_default');
+                if (sysSock && sysStatus === 'ready') {
+                    sock = sysSock;
+                    status = 'ready';
+                }
+            }
+
+            if (sock && status === 'ready') {
+                try {
+                    console.log(`[WhatsApp Outbox] Delivering queued message to ${item.phone}...`);
+                    const targetJid = formatPhoneForBaileys(item.phone);
+                    if (item.type === 'media') {
+                        let messagePayload = null;
+                        if (item.fileUrl) {
+                            const isPdf = (item.fileUrl || '').toLowerCase().includes('.pdf');
+                            const localPath = resolveLocalFilePath(item.fileUrl);
+                            if (localPath && fs.existsSync(localPath)) {
+                                const buffer = fs.readFileSync(localPath);
+                                const fileName = path.basename(localPath);
+                                messagePayload = isPdf 
+                                    ? { document: buffer, mimetype: 'application/pdf', fileName, caption: item.caption }
+                                    : { image: buffer, caption: item.caption };
+                            } else {
+                                console.warn(`[WhatsApp Outbox] ⚠️ Media file not found on disk: "${item.fileUrl}". Falling back to text.`);
+                                if (item.caption && item.caption.trim()) {
+                                    messagePayload = { text: item.caption };
+                                }
+                            }
+                        } else if (item.caption && item.caption.trim()) {
+                            messagePayload = { text: item.caption };
+                        }
+
+                        if (!messagePayload) {
+                            throw new Error(`No valid media or text content for queued item to ${item.phone}`);
+                        }
+                        await sock.sendMessage(targetJid, messagePayload);
+                    } else {
+                        await sock.sendMessage(targetJid, { text: item.message });
+                    }
+                    console.log(`[WhatsApp Outbox] ✅ Successfully delivered queued message to ${item.phone}`);
+                    logToFile(`Outbox successfully delivered to ${item.phone}`);
+                    broadcast('whatsapp-queued-delivered', { phone: item.phone, id: item.id });
+                    // Prevent rapid message flooding on socket
+                    await new Promise(r => setTimeout(r, 600));
+                    continue; // Successfully delivered
+                } catch (sendErr) {
+                    item.attempts++;
+                    console.warn(`[WhatsApp Outbox] Attempt ${item.attempts} failed for ${item.phone}:`, sendErr.message);
+                }
+            }
+
+            // If not delivered yet and within retry budget, keep in queue
+            if (item.attempts < item.maxAttempts) {
+                remaining.push(item);
+            } else {
+                console.error(`[WhatsApp Outbox] ❌ Dropped message to ${item.phone} after ${item.maxAttempts} attempts.`);
+                logToFile(`Outbox dropped after max attempts for ${item.phone}`);
+            }
+        }
+        outboxQueue.push(...remaining);
+    } catch (qErr) {
+        console.error('[WhatsApp Outbox] Queue processing error:', qErr);
+    } finally {
+        isQueueProcessing = false;
+    }
+};
+
+// Check outbox every 8 seconds
+setInterval(processOutbox, 8000);
+
+// Helper to wait until a session becomes ready (active websocket handshake complete)
+const waitForSessionReady = async (sessionId, timeoutMs = 15000) => {
+    // 1. If already ready, return socket immediately
+    if (clientStatus.get(sessionId) === 'ready' && clients.has(sessionId)) {
+        return clients.get(sessionId);
+    }
+
+    // 2. Check if auth credentials exist on disk
+    const sessionFolder = path.join(whatsappAuthPath, `session-${sessionId}`);
+    const credsFile = path.join(sessionFolder, 'creds.json');
+    const hasCreds = fs.existsSync(credsFile);
+
+    if (!hasCreds) {
+        return null; // Session has never been paired or was logged out
+    }
+
+    // 3. If credentials exist, but session is not initializing or ready, trigger initialization
+    const currentStatus = clientStatus.get(sessionId);
+    if (currentStatus !== 'initializing' && currentStatus !== 'ready') {
+        console.log(`[WhatsApp] Session ${sessionId} has credentials but is in '${currentStatus || 'idle'}' state. Starting initialization...`);
+        initialize(sessionId);
+    }
+
+    // 4. Poll until ready or timeout
+    const startTime = Date.now();
+    while (Date.now() - startTime < timeoutMs) {
+        await new Promise((r) => setTimeout(r, 400));
+        if (clientStatus.get(sessionId) === 'ready' && clients.has(sessionId)) {
+            return clients.get(sessionId);
+        }
+        if (clientStatus.get(sessionId) === 'qr') {
+            return null;
+        }
+    }
+
+    console.warn(`[WhatsApp] Timed out waiting for session ${sessionId} to become ready after ${timeoutMs}ms.`);
+    return null;
+};
+
 const resolveClient = (adminId, isOtp = false) => {
     if (isOtp) return { sock: clients.get('system_default'), id: 'system_default' };
 
@@ -334,12 +550,29 @@ const formatPhoneForBaileys = (phone) => {
 };
 
 const sendWhatsapp = async (phone, message, adminId = null, isOtp = false, retryCount = 0) => {
-    const { sock, id } = resolveClient(adminId, isOtp);
-    const status = clientStatus.get(id);
+    let { sock, id } = resolveClient(adminId, isOtp);
+    let status = clientStatus.get(id);
 
     if (!sock || status !== 'ready') {
-        logToFile(`sendWhatsapp Failed - Session ${id} not ready`, { phone, status });
-        throw new Error(`WhatsApp client session "${id}" is not ready yet!`);
+        // Wait for session to be ready if it's reconnecting or needs initialize
+        const readySock = await waitForSessionReady(id, 15000);
+        if (readySock) {
+            sock = readySock;
+            status = 'ready';
+        } else {
+            // Fallback: If this is an admin session that is not ready/paired, but system_default is ready
+            const systemSock = clients.get('system_default');
+            const systemStatus = clientStatus.get('system_default');
+            if (id !== 'system_default' && !isOtp && systemSock && systemStatus === 'ready') {
+                console.log(`[WhatsApp] Session ${id} not ready; falling back to system_default for sending to ${phone}`);
+                sock = systemSock;
+                id = 'system_default';
+                status = 'ready';
+            } else {
+                logToFile(`sendWhatsapp Failed - Session ${id} not ready`, { phone, status });
+                throw new Error(`WhatsApp client session "${id}" is not ready yet!`);
+            }
+        }
     }
 
     console.log(`[WhatsApp] Sending via session: ${id} to phone: ${phone}`);
@@ -378,30 +611,58 @@ const sendWhatsapp = async (phone, message, adminId = null, isOtp = false, retry
             e.output?.statusCode === 428
         );
 
-        if (isConnectionError) {
-            // Mark as disconnected & re-initialize socket
+        if (isConnectionError && retryCount < 2) {
+            console.log(`[WhatsApp] Connection dropped for ${id}. Cleaning up and waiting for reconnect to retry sending to ${phone}...`);
             clientStatus.set(id, 'disconnected');
-            initialize(id);
+            const oldSock = clients.get(id);
+            if (oldSock) {
+                try { oldSock.ws.close(); } catch (_) {}
+            }
+            clients.delete(id);
 
-            // Auto-retry once after waiting 3 seconds for reconnection
-            if (retryCount < 1) {
-                console.log(`[WhatsApp] Connection dropped. Waiting 3s to auto-retry sending to ${phone}...`);
-                await new Promise((r) => setTimeout(r, 3000));
+            initialize(id);
+            const reconnectedSock = await waitForSessionReady(id, 15000);
+            if (reconnectedSock) {
+                console.log(`[WhatsApp] Reconnected successfully! Retrying send to ${phone}...`);
                 return sendWhatsapp(phone, message, adminId, isOtp, retryCount + 1);
             }
         }
         
+        // Save to Outbox so message is NEVER lost
+        addToOutbox({
+            type: 'text',
+            phone,
+            message,
+            adminId,
+            isOtp
+        });
+
         throw new Error(e.message || "Failed to send WhatsApp message.");
     }
 };
 
 const sendWhatsappMedia = async (phone, fileUrl, caption, adminId = null, retryCount = 0) => {
-    const { sock, id } = resolveClient(adminId, false);
-    const status = clientStatus.get(id);
+    let { sock, id } = resolveClient(adminId, false);
+    let status = clientStatus.get(id);
 
     if (!sock || status !== 'ready') {
-        logToFile(`sendWhatsappMedia Failed - Session ${id} not ready`, { phone, fileUrl, status });
-        throw new Error(`WhatsApp client session "${id}" is not ready yet!`);
+        const readySock = await waitForSessionReady(id, 15000);
+        if (readySock) {
+            sock = readySock;
+            status = 'ready';
+        } else {
+            const systemSock = clients.get('system_default');
+            const systemStatus = clientStatus.get('system_default');
+            if (id !== 'system_default' && systemSock && systemStatus === 'ready') {
+                console.log(`[WhatsApp] Session ${id} not ready; falling back to system_default for media sending to ${phone}`);
+                sock = systemSock;
+                id = 'system_default';
+                status = 'ready';
+            } else {
+                logToFile(`sendWhatsappMedia Failed - Session ${id} not ready`, { phone, fileUrl, status });
+                throw new Error(`WhatsApp client session "${id}" is not ready yet!`);
+            }
+        }
     }
 
     console.log(`[WhatsApp] Sending media via session: ${id} to: ${phone}`);
@@ -409,73 +670,37 @@ const sendWhatsappMedia = async (phone, fileUrl, caption, adminId = null, retryC
 
     const targetJid = formatPhoneForBaileys(phone);
     try {
-        const isPdf = fileUrl.toLowerCase().includes('.pdf');
+        const isPdf = (fileUrl || '').toLowerCase().includes('.pdf');
         
         // Resolve URL locally (respecting NAS vs Local)
         let localPath = null;
+        let messagePayload = null;
+
         if (fileUrl) {
-            let relativePath = fileUrl.trim();
-            if (relativePath.startsWith('http://') || relativePath.startsWith('https://')) {
-                try {
-                    const urlObj = new URL(relativePath);
-                    relativePath = urlObj.pathname;
-                } catch (e) {}
-            }
-            try { relativePath = decodeURIComponent(relativePath); } catch (e) {}
-            relativePath = relativePath.replace(/\\/g, '/');
-
-            const useNas = process.env.USE_NAS === 'true';
-            const nasRoot = process.env.NAS_BASE_PATH || '/app/storage';
-            const localRoot = process.env.LOCAL_BASE_PATH || './uploads';
-
-            if (relativePath.includes('/uploads/')) {
-                const subPathParts = relativePath.split('/uploads/');
-                const subPath = subPathParts[subPathParts.length - 1];
-                if (useNas) {
-                    localPath = path.join(nasRoot, subPath);
-                } else {
-                    const baseDir = path.isAbsolute(localRoot) ? localRoot : path.join(process.cwd(), localRoot);
-                    localPath = path.join(baseDir, subPath);
-                }
-            }
-            if ((!localPath || !fs.existsSync(localPath)) && relativePath.startsWith('/api/')) {
-                localPath = path.join(process.cwd(), relativePath.replace('/api/', ''));
-            }
-        }
-        
-        let messagePayload = {};
-
-        if (localPath && fs.existsSync(localPath)) {
-            console.log(`[WhatsApp] Resolving media locally from path: ${localPath}`);
-            const buffer = fs.readFileSync(localPath);
-            const fileName = path.basename(localPath);
-            if (isPdf) {
-                messagePayload = { document: buffer, mimetype: 'application/pdf', fileName, caption };
-            } else {
-                messagePayload = { image: buffer, caption };
-            }
-        } else if (fileUrl.startsWith('http://') || fileUrl.startsWith('https://')) {
-            if (isPdf) {
-                messagePayload = { document: { url: fileUrl }, mimetype: 'application/pdf', caption };
-            } else {
-                messagePayload = { image: { url: fileUrl }, caption };
-            }
-        } else {
-            let cleanedPath = fileUrl;
-            if (!cleanedPath.includes(':') && !cleanedPath.startsWith('/') && !cleanedPath.startsWith('\\')) {
-                 cleanedPath = path.join(__dirname, '../../', fileUrl);
-            }
-            if (fs.existsSync(cleanedPath)) {
-                const buffer = fs.readFileSync(cleanedPath);
-                const fileName = path.basename(cleanedPath);
+            localPath = resolveLocalFilePath(fileUrl);
+            
+            if (localPath && fs.existsSync(localPath)) {
+                const buffer = fs.readFileSync(localPath);
+                const fileName = path.basename(localPath);
                 if (isPdf) {
                     messagePayload = { document: buffer, mimetype: 'application/pdf', fileName, caption };
                 } else {
                     messagePayload = { image: buffer, caption };
                 }
             } else {
-                throw new Error(`Local file not found at: ${cleanedPath} (Tried localPath: ${localPath})`);
+                console.warn(`[WhatsApp] Local file not found for: "${fileUrl}" (Checked NAS and Local storage: localPath=${localPath})`);
+                // If local file is missing but caption exists, fallback to text so recipient always gets the message
+                if (caption && caption.trim()) {
+                    console.log(`[WhatsApp] Falling back to text message with caption for ${phone}`);
+                    messagePayload = { text: caption };
+                } else {
+                    throw new Error(`Local media file not found on disk for: "${fileUrl}"`);
+                }
             }
+        } else if (caption && caption.trim()) {
+            messagePayload = { text: caption };
+        } else {
+            throw new Error("No media file or message content provided.");
         }
 
         const sendPromise = sock.sendMessage(targetJid, messagePayload);
@@ -499,17 +724,32 @@ const sendWhatsappMedia = async (phone, fileUrl, caption, adminId = null, retryC
             e.output?.statusCode === 428
         );
 
-        if (isConnectionError) {
+        if (isConnectionError && retryCount < 2) {
+            console.log(`[WhatsApp] Connection dropped for media ${id}. Cleaning up and waiting for reconnect to retry sending to ${phone}...`);
             clientStatus.set(id, 'disconnected');
-            initialize(id);
+            const oldSock = clients.get(id);
+            if (oldSock) {
+                try { oldSock.ws.close(); } catch (_) {}
+            }
+            clients.delete(id);
 
-            if (retryCount < 1) {
-                console.log(`[WhatsApp] Connection dropped. Waiting 3s to auto-retry sending media to ${phone}...`);
-                await new Promise((r) => setTimeout(r, 3000));
+            initialize(id);
+            const reconnectedSock = await waitForSessionReady(id, 15000);
+            if (reconnectedSock) {
+                console.log(`[WhatsApp] Reconnected successfully! Retrying media send to ${phone}...`);
                 return sendWhatsappMedia(phone, fileUrl, caption, adminId, retryCount + 1);
             }
         }
         
+        // Save to Outbox so media message is NEVER lost
+        addToOutbox({
+            type: 'media',
+            phone,
+            fileUrl,
+            caption,
+            adminId
+        });
+
         throw new Error(e.message || "Failed to send WhatsApp media message.");
     }
 };

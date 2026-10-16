@@ -147,16 +147,25 @@ const createQuotation = async (req, res) => {
             const targetCompany = partyName || (enquiry && enquiry.companyName) || '';
 
             if (targetPhone && targetPhone !== 'N/A') {
-                addToGoogleContacts({
-                    name: targetName,
-                    phone: targetPhone,
-                    email: targetEmail,
-                    company: targetCompany,
-                    source: 'Quotation Creation'
-                }).catch(err => {
-                    console.error('[Google Contacts Error in Quotation]:', err.message);
-                });
+                const cleanPhone = (targetPhone || '').replace(/\D/g, '');
+                try {
+                    googleContactResult = await addToGoogleContacts({
+                        name: targetName,
+                        phone: targetPhone,
+                        email: targetEmail,
+                        company: targetCompany,
+                        address: address || (enquiry && enquiry.address) || '',
+                        gstNumber: gstNumber || (enquiry && enquiry.gstNumber) || '',
+                        username: cleanPhone.length >= 8 ? cleanPhone.slice(-8) : cleanPhone,
+                        source: 'Quotation Creation'
+                    });
+                } catch (gcErr) {
+                    console.error('[Google Contacts Error in Quotation]:', gcErr.message);
+                    googleContactResult = { success: false, error: gcErr.message };
+                }
             }
+            res.json({ ...saved.toObject(), googleContactResult });
+            return;
         } catch (syncErr) {
             console.error('[Google Contacts Error in Quotation]:', syncErr.message);
         }
@@ -233,7 +242,30 @@ const updateQuotation = async (req, res) => {
         }
 
         const updated = await quotation.save();
-        res.json(updated);
+
+        let googleContactResult = null;
+        const targetPhone = quotation.mobile || (quotation.enquiry && quotation.enquiry.phone);
+        if (targetPhone && targetPhone !== 'N/A') {
+            const cleanPhone = (targetPhone || '').replace(/\D/g, '');
+            const targetName = (quotation.contactPerson || quotation.partyName || (quotation.enquiry && quotation.enquiry.contactPersonName) || 'Client').trim();
+            try {
+                googleContactResult = await addToGoogleContacts({
+                    name: targetName,
+                    phone: targetPhone,
+                    email: quotation.email || (quotation.enquiry && quotation.enquiry.email),
+                    company: quotation.partyName || (quotation.enquiry && quotation.enquiry.companyName) || '',
+                    address: quotation.address || (quotation.enquiry && quotation.enquiry.address) || '',
+                    gstNumber: quotation.gstNumber || (quotation.enquiry && quotation.enquiry.gstNumber) || '',
+                    username: targetName || cleanPhone.slice(-8),
+                    source: 'Quotation Update'
+                });
+            } catch (syncErr) {
+                console.error('[Google Contacts Error in Quotation Update]:', syncErr.message);
+                googleContactResult = { success: false, error: syncErr.message };
+            }
+        }
+
+        res.json({ ...updated.toObject(), googleContactResult });
     } catch (err) {
         console.error(err.message);
         res.status(500).send('Server Error');

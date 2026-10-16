@@ -1,21 +1,12 @@
 /**
- * One-time Sync Script: Sync Users from MongoDB to Google Contacts
- * 
- * Multi-Platform & NAS Ready:
- * - Synology NAS (e.g. /volume1/docker/...)
- * - Docker Containers (/app)
- * - Linux / Production VPS
- * - Local Development (Windows / macOS / Linux)
+ * Production Sync Script: Sync Users from MongoDB to Google Contacts
  * 
  * Features:
- * 1. Fully platform-agnostic (ZERO hardcoded OS drives or directory paths).
- * 2. Auto-detects backend directory and .env location relative to __dirname / process.cwd().
- * 3. Checks each user's phone against Google Contacts (People API).
- * 4. If phone already exists in Google Contacts -> SKIPS (prevents duplicate).
- * 5. If phone does NOT exist in Google Contacts -> ADDS new contact.
- * 6. Deduplicates within the database batch (never processes the same phone twice).
- * 7. Skips invalid/dummy numbers (e.g. all zeros).
- * 8. Real-time terminal logs and a final summary report.
+ * 1. Dual-layer phone matching (searchContacts + cached connections list).
+ * 2. Primary Keeper Logic: Latest MongoDB user details are authoritative.
+ * 3. Automatic Merge & Fix: Automatically cleans up and deletes duplicate cards in Google Contacts.
+ * 4. EU- Prefix: Guarantees EU-{name} display name and EU-{username} in contact ID.
+ * 5. Real-time detailed logs and final summary report.
  * 
  * Usage:
  *   node sync_users_to_google_contacts.js
@@ -56,10 +47,9 @@ if (envFile) {
     require('dotenv').config();
 }
 
-// Portable imports using relative path resolution
 const connectDB = require(path.join(backendDir, 'src', 'configs', 'db'));
 const User = require(path.join(backendDir, 'src', 'models', 'User'));
-const { addToGoogleContacts, getLast10Digits } = require(path.join(backendDir, 'src', 'utils', 'googleContacts'));
+const { addToGoogleContacts, getLast10Digits, isValidRealEmail } = require(path.join(backendDir, 'src', 'utils', 'googleContacts'));
 
 const delay = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
 
@@ -74,12 +64,10 @@ const isValidPhoneNumber = (phone) => {
 
 async function syncUsersToGoogleContacts() {
     console.log('\n================================================================');
-    console.log('🚀 GOOGLE CONTACTS USER SYNC SCRIPT');
+    console.log('🚀 HIGH-ACCURACY GOOGLE CONTACTS USER SYNC & DEDUPLICATION');
     console.log('================================================================');
-    console.log('System Info:');
-    console.log(`  OS Platform:     ${process.platform}`);
-    console.log(`  Backend Root:    ${backendDir}`);
-    console.log(`  Env Config:      ${envFile || 'Environment variables (Docker/System)'}`);
+    console.log(`Backend Root: ${backendDir}`);
+    console.log(`Env File:     ${envFile || 'Using process.env'}`);
     console.log('----------------------------------------------------------------\n');
 
     // 1. Connect to Database
@@ -92,9 +80,10 @@ async function syncUsersToGoogleContacts() {
     const summary = {
         total: users.length,
         skippedInvalidPhone: 0,
-        skippedDuplicateInDb: 0,
-        skippedAlreadyInGoogle: 0,
+        skippedDuplicateInBatch: 0,
+        updatedInGoogle: 0,
         addedToGoogle: 0,
+        duplicatesCleaned: 0,
         errors: 0
     };
 
@@ -105,80 +94,98 @@ async function syncUsersToGoogleContacts() {
         const rawPhone = (u.phone || '').trim();
         const last10 = getLast10Digits(rawPhone);
 
-        const displayName = (u.name && u.name.trim()) 
-            || (u.contactPersonName && u.contactPersonName.trim()) 
+        const displayName = (u.contactPersonName && u.contactPersonName.trim()) 
+            || (u.name && u.name.trim()) 
             || (u.companyName && u.companyName.trim()) 
             || 'Client';
 
-        const email = u.email && !u.email.endsWith('@gmail.com') && !u.email.includes('noemail') 
-            ? u.email.trim() 
-            : (u.email || '');
-
-        const company = u.companyName && u.companyName !== 'None' && u.companyName !== 'Guest' 
+        const email = u.email && isValidRealEmail(u.email) ? u.email.trim() : '';
+        const company = u.companyName && !['None', 'Guest', 'undefined'].includes(u.companyName.trim()) 
             ? u.companyName.trim() 
             : '';
+        const address = (u.address || '').toString().trim();
+        const gstNumber = (u.gstNumber || '').toString().trim();
+        const username = (u.name || u.contactPersonName || u.companyName || last10).trim();
 
-        console.log(`\n[${i + 1}/${users.length}] Checking: "${displayName}" (Phone: ${rawPhone || 'EMPTY'})`);
-
-        // Check if phone number is valid
+        // 1. Check phone validity
         if (!isValidPhoneNumber(rawPhone)) {
-            console.log(`   ⚠️ Skipped: Invalid or dummy phone number "${rawPhone}".`);
+            console.log(`[${i + 1}/${users.length}] ⚠️ Skipped "${displayName}": Invalid phone "${rawPhone}"`);
             summary.skippedInvalidPhone++;
             continue;
         }
 
-        // Check if we already processed this phone earlier in this script run
+        // 2. Avoid processing the same phone twice in the same batch
         if (processedPhones.has(last10)) {
-            console.log(`   ⏭️ Skipped: Phone "${rawPhone}" was already processed from an earlier user record in this batch.`);
-            summary.skippedDuplicateInDb++;
+            console.log(`[${i + 1}/${users.length}] ⏭️ Skipped "${displayName}": Duplicate phone ${rawPhone} already synced in this run`);
+            summary.skippedDuplicateInBatch++;
             continue;
         }
-
         processedPhones.add(last10);
 
+        process.stdout.write(`[${i + 1}/${users.length}] Syncing: "${displayName}" (${rawPhone})... `);
+
         try {
-            // Call addToGoogleContacts (which checks Google Contacts first!)
+            // Authoritative Primary Keeper Sync:
+            // Updates primary contact with EU- prefix & payload details, and auto-deletes any duplicate cards!
             const result = await addToGoogleContacts({
                 name: displayName,
                 phone: rawPhone,
-                email: email,
+                email: email || undefined,
                 company: company,
-                source: 'User Model Migration'
+                address: address,
+                gstNumber: gstNumber,
+                username: username,
+                source: 'User Database Sync'
             });
 
-            if (result && result.added) {
-                summary.addedToGoogle++;
-            } else if (result && result.reason === 'Already exists in Google Contacts') {
-                summary.skippedAlreadyInGoogle++;
+            if (result && result.success) {
+                if (result.added) {
+                    console.log(`✅ CREATED NEW ("${result.contactName}")`);
+                    summary.addedToGoogle++;
+                } else if (result.updated) {
+                    const diffCount = (result.fieldChanges?.updatedFields?.length || 0) + (result.fieldChanges?.addedFields?.length || 0);
+                    const delCount = result.deletedDuplicates?.length || 0;
+                    if (delCount > 0) summary.duplicatesCleaned += delCount;
+                    console.log(`🔄 UPDATED ("${result.contactName}" | ${diffCount} fields changed${delCount > 0 ? ` | 🗑️ ${delCount} duplicate card(s) deleted` : ''})`);
+                    summary.updatedInGoogle++;
+                } else {
+                    console.log(`✅ In Sync`);
+                }
             } else {
+                console.log(`⚠️ Skipped (${result?.reason || result?.error || 'Unknown'})`);
                 summary.errors++;
             }
         } catch (err) {
-            console.error(`   ❌ Error processing user "${displayName}":`, err.message);
+            console.log(`❌ Error: ${err.message}`);
             summary.errors++;
         }
 
-        // Brief delay between requests to be gentle with Google API rate limits
-        await delay(500);
+        // Gentle delay between requests to respect Google People API rate limits
+        await delay(350);
     }
 
     console.log('\n================================================================');
-    console.log('📊 SYNC SUMMARY REPORT');
+    console.log('📊 GOOGLE CONTACTS USER SYNC COMPLETE');
     console.log('================================================================');
-    console.log(`Total User records in DB:               ${summary.total}`);
-    console.log(`Skipped (Invalid/Dummy Phone):          ${summary.skippedInvalidPhone}`);
-    console.log(`Skipped (Duplicate phone within DB):    ${summary.skippedDuplicateInDb}`);
-    console.log(`Skipped (ALREADY in Google Contacts):   ${summary.skippedAlreadyInGoogle}`);
-    console.log(`✅ NEWLY ADDED to Google Contacts:      ${summary.addedToGoogle}`);
+    console.log(`Total DB User Records:              ${summary.total}`);
+    console.log(`Skipped (Invalid/Dummy Phone):      ${summary.skippedInvalidPhone}`);
+    console.log(`Skipped (Duplicate Phone in DB):    ${summary.skippedDuplicateInBatch}`);
+    console.log(`✅ Primary Contacts UPDATED:         ${summary.updatedInGoogle}`);
+    console.log(`🆕 New Contacts CREATED:            ${summary.addedToGoogle}`);
+    console.log(`🗑️ Redundant Duplicates DELETED:    ${summary.duplicatesCleaned}`);
     if (summary.errors > 0) {
-        console.log(`❌ Errors encountered:                  ${summary.errors}`);
+        console.log(`⚠️ Errors Encountered:              ${summary.errors}`);
     }
     console.log('================================================================\n');
 
     process.exit(0);
 }
 
-syncUsersToGoogleContacts().catch((err) => {
-    console.error('Fatal sync script error:', err);
-    process.exit(1);
-});
+if (require.main === module) {
+    syncUsersToGoogleContacts().catch((err) => {
+        console.error('Fatal sync script error:', err);
+        process.exit(1);
+    });
+}
+
+module.exports = { syncUsersToGoogleContacts };

@@ -1,4 +1,4 @@
-﻿const express = require('express');
+const express = require('express');
 const router = express.Router();
 const Enquiry = require('../models/Enquiry');
 const User = require('../models/User');
@@ -8,7 +8,7 @@ const { addToGoogleContacts } = require('../utils/googleContacts');
 // Create enquiry
 router.post('/', async (req, res) => {
     try {
-        const { companyName, contactPersonName, phone, email, gstNumber, products, type, status } = req.body;
+        const { companyName, contactPersonName, phone, email, gstNumber, address, clientAddress, products, type, status } = req.body;
 
         // 1. Mandatory Validation check
         if (!companyName && !contactPersonName) {
@@ -17,6 +17,8 @@ router.post('/', async (req, res) => {
         if (!phone || !email) {
             return res.status(400).json({ msg: 'Phone and Email are required' });
         }
+
+        const clientAddr = (address || clientAddress || '').trim();
 
         // 2. Find or Create User
         let user = await User.findByEmail(email);
@@ -33,9 +35,17 @@ router.post('/', async (req, res) => {
                 companyName: companyName || '',
                 contactPersonName: contactPersonName || '',
                 gstNumber: gstNumber || '',
+                address: clientAddr,
                 name: contactPersonName || companyName || 'Client'
             });
             await user.save();
+        } else {
+            let updated = false;
+            if (clientAddr && !user.address) { user.address = clientAddr; updated = true; }
+            if (gstNumber && !user.gstNumber) { user.gstNumber = gstNumber; updated = true; }
+            if (companyName && !user.companyName) { user.companyName = companyName; updated = true; }
+            if (contactPersonName && !user.contactPersonName) { user.contactPersonName = contactPersonName; updated = true; }
+            if (updated) await user.save();
         }
 
         // 3. Create Enquiry
@@ -44,6 +54,7 @@ router.post('/', async (req, res) => {
             companyName,
             contactPersonName,
             gstNumber,
+            address: clientAddr,
             email,
             phone,
             products,
@@ -52,20 +63,31 @@ router.post('/', async (req, res) => {
         });
         await enquiry.save();
 
-        // 5. Automatic Google Contacts Sync (with duplicate check & detailed logs)
+        // 5. Automatic Google Contacts Sync (with duplicate check, address, GST & EU-username)
         const clientName = (contactPersonName && contactPersonName.trim()) 
             || (companyName && companyName.trim()) 
+            || (req.body.Name && req.body.Name.trim())
             || 'Enquiry Client';
 
-        addToGoogleContacts({
-            name: clientName,
-            phone: phone,
-            email: email,
-            company: companyName || '',
-            source: 'Product Enquiry'
-        }).catch(err => {
+        const cleanPhone = (phone || '').replace(/\D/g, '');
+        const clientUsername = req.body.username || contactPersonName || companyName || req.body.Name || (cleanPhone ? cleanPhone.slice(-8) : '');
+
+        let googleContactResult = { success: false, reason: 'Not attempted' };
+        try {
+            googleContactResult = await addToGoogleContacts({
+                name: clientName,
+                phone: phone,
+                email: email,
+                company: companyName || '',
+                address: clientAddr || (user && user.address) || '',
+                gstNumber: gstNumber || (user && user.gstNumber) || '',
+                username: clientUsername,
+                source: 'Product Enquiry'
+            });
+        } catch (err) {
             console.error('[Google Contacts Error in Enquiry]:', err.message);
-        });
+            googleContactResult = { success: false, error: err.message };
+        }
 
         // 4. Clear ALL cart documents related to this enquiry
         const { sessionId } = req.body;
@@ -99,7 +121,7 @@ router.post('/', async (req, res) => {
             await Cart.deleteMany({ $or: deleteConditions });
         }
 
-        res.json(enquiry);
+        res.json({ ...enquiry.toObject(), googleContactResult });
     } catch (e) {
         console.error(e);
         res.status(500).send('Error processing enquiry');
@@ -120,7 +142,7 @@ router.get('/stats', async (req, res) => {
     }
 });
 
-// ── GET /api/enquiries — paginated, filterable by type & search ──────────────
+// GET /api/enquiries - paginated, filterable by type & search
 // Query params:
 //   type     = 'enquiry' | 'whatsapp'  (required for tab separation)
 //   page     = 1, 2, ...               (default: 1)
@@ -182,7 +204,7 @@ router.patch('/:id/seen', async (req, res) => {
     } catch (e) { res.status(500).send('Error'); }
 });
 
-// Update enquiry (e.g. status)
+// Update enquiry (e.g. status or details)
 router.put('/:id', async (req, res) => {
     try {
         const enquiry = await Enquiry.findByIdAndUpdate(
@@ -191,7 +213,49 @@ router.put('/:id', async (req, res) => {
             { new: true }
         );
         if (!enquiry) return res.status(404).json({ msg: 'Enquiry not found' });
-        res.json(enquiry);
+
+        // Update corresponding User in MongoDB if exists
+        try {
+            const userPhone = enquiry.phone;
+            if (userPhone) {
+                let user = await User.findOne({ phone: userPhone });
+                if (user) {
+                    let userUpdated = false;
+                    if (req.body.companyName) { user.companyName = req.body.companyName; userUpdated = true; }
+                    if (req.body.contactPersonName) { user.contactPersonName = req.body.contactPersonName; userUpdated = true; }
+                    if (req.body.gstNumber) { user.gstNumber = req.body.gstNumber; userUpdated = true; }
+                    if (req.body.address) { user.address = req.body.address; userUpdated = true; }
+                    if (req.body.email) { user.email = req.body.email; userUpdated = true; }
+                    if (userUpdated) await user.save();
+                }
+            }
+        } catch (_) {}
+
+        // Overwrite & Sync to Google Contacts
+        let googleContactResult = { success: false, reason: 'No phone' };
+        if (enquiry.phone) {
+            const clientName = (req.body.contactPersonName || enquiry.contactPersonName || req.body.companyName || enquiry.companyName || enquiry.Name || 'Client').trim();
+            const cleanPhone = (enquiry.phone || '').replace(/\D/g, '');
+            const clientUsername = req.body.username || enquiry.contactPersonName || enquiry.companyName || cleanPhone.slice(-8);
+
+            try {
+                googleContactResult = await addToGoogleContacts({
+                    name: clientName,
+                    phone: enquiry.phone,
+                    email: req.body.email || enquiry.email,
+                    company: req.body.companyName || enquiry.companyName || '',
+                    address: req.body.address || enquiry.address || '',
+                    gstNumber: req.body.gstNumber || enquiry.gstNumber || '',
+                    username: clientUsername,
+                    source: 'Enquiry Update'
+                });
+            } catch (err) {
+                console.error('[Google Contacts Error in Enquiry Update]:', err.message);
+                googleContactResult = { success: false, error: err.message };
+            }
+        }
+
+        res.json({ ...enquiry.toObject(), googleContactResult });
     } catch (e) { res.status(500).send('Error'); }
 });
 

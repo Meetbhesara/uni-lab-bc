@@ -1,13 +1,14 @@
 const jwt = require('jsonwebtoken');
 const bcrypt = require('bcryptjs');
 const User = require('../models/User');
+const ClientMaster = require('../models/ClientMaster');
 const SystemSettings = require('../models/SystemSettings');
 const AdminLoginLog = require('../models/AdminLoginLog');
 const { sendWhatsapp } = require('../utils/whatsappService');
 const speakeasy = require('speakeasy');
 const QRCode = require('qrcode');
 const crypto = require('crypto');
-const { addToGoogleContacts } = require('../utils/googleContacts');
+const { addToGoogleContacts, getLast10Digits, isValidRealEmail } = require('../utils/googleContacts');
 
 function getDistanceInMeters(lat1, lon1, lat2, lon2) {
     const R = 6371e3; // Earth's radius in meters
@@ -145,7 +146,7 @@ const getMe = async (req, res) => {
             }
         }
 
-        res.json({ id: user._id, _id: user._id, name: user.name, email: user.email, phone: user.phone, isAdmin: user.isAdmin, isSuperAdmin: user.isSuperAdmin, permissions: user.permissions, companyName: user.companyName, contactPersonName: user.contactPersonName, gstNumber: user.gstNumber });
+        res.json({ id: user._id, _id: user._id, name: user.name, email: user.email, phone: user.phone, isAdmin: user.isAdmin, isSuperAdmin: user.isSuperAdmin, permissions: user.permissions, companyName: user.companyName, contactPersonName: user.contactPersonName, gstNumber: user.gstNumber, address: user.address });
     } catch (err) {
         console.error(err.message);
         res.status(500).send('Server Error');
@@ -271,7 +272,7 @@ const phoneLogin = async (req, res) => {
             { expiresIn: process.env.JWT_EXPIRE || '365d' },
             (err, token) => {
                 if (err) throw err;
-                res.json({ token, user: { id: user.id, name: user.name, email: user.email, phone: user.phone, isAdmin: user.isAdmin, companyName: user.companyName, contactPersonName: user.contactPersonName, gstNumber: user.gstNumber } });
+                res.json({ token, user: { id: user.id, name: user.name, email: user.email, phone: user.phone, isAdmin: user.isAdmin, companyName: user.companyName, contactPersonName: user.contactPersonName, gstNumber: user.gstNumber, address: user.address } });
             }
         );
     } catch (err) {
@@ -281,7 +282,7 @@ const phoneLogin = async (req, res) => {
 };
 
 const phoneRegister = async (req, res) => {
-    const { phone, email, name, companyName, contactPersonName, gstNumber } = req.body;
+    const { phone, email, name, companyName, contactPersonName, gstNumber, address, clientAddress } = req.body;
 
     if (!phone) {
         return res.status(400).json({ msg: 'Please enter phone number' });
@@ -298,6 +299,9 @@ const phoneRegister = async (req, res) => {
 
         // --- NEW: Restrict Admin and Existing Emails ---
         if (email) {
+            if (!isValidRealEmail(email)) {
+                return res.status(400).json({ msg: 'Please enter a valid email address' });
+            }
             const existingEmailUser = await User.findByEmail(email);
             if (existingEmailUser) {
                 if (existingEmailUser.isAdmin) {
@@ -323,7 +327,10 @@ const phoneRegister = async (req, res) => {
             name: user.name,
             phone: user.phone,
             email: user.email,
-            company: user.companyName || ''
+            company: user.companyName || '',
+            address: user.address || '',
+            gstNumber: user.gstNumber || '',
+            source: 'Registration'
         }).catch(() => {}); // fire and forget — never block registration
 
         const payload = {
@@ -678,6 +685,95 @@ const getUsers = async (req, res) => {
     }
 };
 
+
+// UPDATE regular user details (Admin Dashboard)
+const updateUser = async (req, res) => {
+    try {
+        const { id } = req.params;
+        const { name, contactPersonName, companyName, email, phone, gstNumber, address } = req.body;
+
+        const user = await User.findById(id);
+        if (!user) {
+            return res.status(404).json({ success: false, msg: 'User not found' });
+        }
+
+        const oldPhone = user.phone;
+
+        // Check and validate email if provided
+        if (email !== undefined && email !== null) {
+            const trimmedEmail = email.trim().toLowerCase();
+            if (trimmedEmail && trimmedEmail !== (user.email || '').toLowerCase()) {
+                if (!isValidRealEmail(trimmedEmail)) {
+                    return res.status(400).json({ success: false, msg: 'Please enter a valid email address' });
+                }
+                const existingUser = await User.findOne({
+                    email: { $regex: new RegExp('^' + trimmedEmail.replace(/[-\/\\^$*+?.()|[\]{}]/g, '\\$&') + '$', 'i') },
+                    _id: { $ne: id }
+                });
+                if (existingUser) {
+                    return res.status(400).json({ success: false, msg: 'Email is already used by another account' });
+                }
+                user.email = trimmedEmail;
+            }
+        }
+
+        if (name !== undefined) user.name = name.trim();
+        if (contactPersonName !== undefined) {
+            user.contactPersonName = contactPersonName.trim();
+            if (!user.name || name === undefined) {
+                user.name = user.name || contactPersonName.trim();
+            }
+        }
+        if (companyName !== undefined) user.companyName = companyName.trim();
+        if (phone !== undefined) {
+            const cleanPhone = phone.trim();
+            const digitsOnly = cleanPhone.replace(/\D/g, '');
+            if (digitsOnly.length < 10) {
+                return res.status(400).json({ success: false, msg: 'Please enter a valid 10-digit phone number' });
+            }
+            user.phone = cleanPhone;
+        }
+        if (gstNumber !== undefined) user.gstNumber = gstNumber.trim().toUpperCase();
+        if (address !== undefined) user.address = address.trim();
+
+        await user.save();
+
+        // Silently sync updated user to central Google Contacts (non-blocking)
+        try {
+            const displayName = user.contactPersonName || user.name || user.companyName || 'User';
+            const phoneChanged = oldPhone && (getLast10Digits(oldPhone) !== getLast10Digits(user.phone) || oldPhone.trim() !== user.phone.trim());
+            console.log(`[Google Contacts] 🔄 Syncing updated user "${displayName}" (Phone: ${user.phone}${phoneChanged ? `, Previous Phone: ${oldPhone}` : ''})...`);
+            addToGoogleContacts({
+                name: displayName,
+                phone: user.phone,
+                oldPhone: phoneChanged ? oldPhone : undefined,
+                email: user.email,
+                company: user.companyName,
+                address: user.address,
+                gstNumber: user.gstNumber,
+                source: 'Admin User Update'
+            }).catch(e => console.error('[Google Contacts] Background sync error on updateUser:', e.message));
+        } catch (contactErr) {
+            console.error('[Google Contacts] Error initiating contact sync:', contactErr.message);
+        }
+
+        const safeUser = user.toObject();
+        delete safeUser.password;
+        delete safeUser.twoFactorSecret;
+        delete safeUser.backupCodes;
+        delete safeUser.otp;
+        delete safeUser.otpExpires;
+
+        res.json({
+            success: true,
+            msg: 'User updated successfully',
+            user: safeUser
+        });
+    } catch (err) {
+        console.error('Update user error:', err.message);
+        res.status(500).json({ success: false, msg: err.message || 'Server error updating user' });
+    }
+};
 
 const updateAdmin = async (req, res) => {
     try {
@@ -1052,6 +1148,71 @@ const deleteAccount = async (req, res) => {
     }
 };
 
+
+const syncUsersToGoogleContactsHandler = async (req, res) => {
+    try {
+        const { addToGoogleContacts, getLast10Digits, isValidRealEmail } = require('../utils/googleContacts');
+        const users = await User.find({}).lean();
+        
+        let updatedCount = 0;
+        let addedCount = 0;
+        let duplicatesCleaned = 0;
+        let errorCount = 0;
+        const processedPhones = new Set();
+
+        for (const u of users) {
+            const rawPhone = (u.phone || '').trim();
+            const last10 = getLast10Digits(rawPhone);
+            if (!last10 || last10.length < 10 || /^(\d)\1{9}$/.test(last10)) continue;
+            if (processedPhones.has(last10)) continue;
+            processedPhones.add(last10);
+
+            const displayName = (u.contactPersonName && u.contactPersonName.trim()) 
+                || (u.name && u.name.trim()) 
+                || (u.companyName && u.companyName.trim()) 
+                || 'Client';
+            const email = u.email && isValidRealEmail(u.email) ? u.email.trim() : '';
+            const company = u.companyName && !['None', 'Guest', 'undefined'].includes(u.companyName.trim()) ? u.companyName.trim() : '';
+
+            try {
+                const r = await addToGoogleContacts({
+                    name: displayName,
+                    phone: rawPhone,
+                    email: email || undefined,
+                    company,
+                    address: (u.address || '').toString().trim(),
+                    gstNumber: (u.gstNumber || '').toString().trim(),
+                    username: (u.name || u.contactPersonName || u.companyName || last10).trim(),
+                    source: 'User API Sync'
+                });
+                if (r && r.added) addedCount++;
+                else if (r && r.updated) {
+                    updatedCount++;
+                    if (r.deletedDuplicates?.length > 0) duplicatesCleaned += r.deletedDuplicates.length;
+                }
+            } catch (e) {
+                errorCount++;
+            }
+        }
+
+        res.json({
+            success: true,
+            msg: `Synced ${users.length} users to Google Contacts successfully!`,
+            stats: {
+                totalUsers: users.length,
+                updatedCount,
+                addedCount,
+                duplicatesCleaned,
+                errorCount
+            }
+        });
+    } catch (err) {
+        res.status(500).json({ success: false, error: err.message });
+    }
+};
+
 module.exports = {
-  updateAdmin, register, login, phoneLogin, phoneRegister, getUserByPhone, sendOtp, verifyOtp, sendAdminOtp, verifyAdminOtp, createAdmin, setup2FA, verifyAndEnable2FA, loginWith2FA, resetWithBackupCode, getAdmins, updateAdminPermissions, getMe, getUsers, getGeofenceSettings, updateGeofenceSettings, getAdminLoginReport, logout, deleteAccount };
+  syncUsersToGoogleContactsHandler,
+
+  updateAdmin, register, login, phoneLogin, phoneRegister, getUserByPhone, sendOtp, verifyOtp, sendAdminOtp, verifyAdminOtp, createAdmin, setup2FA, verifyAndEnable2FA, loginWith2FA, resetWithBackupCode, getAdmins, updateAdminPermissions, getMe, getUsers, updateUser, getGeofenceSettings, updateGeofenceSettings, getAdminLoginReport, logout, deleteAccount };
 

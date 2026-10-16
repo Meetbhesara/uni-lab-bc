@@ -66,6 +66,7 @@ app.use('/api/employee-ledger', employeeLedgerRoutes);
 app.use('/api/drafts', draftingWorkRoutes);
 app.use('/api/events', sseRoutes);
 app.use('/api/admin/health', healthRoutes);
+app.use('/api/catalogs', require('./routes/catalogRoutes'));
 
 // Dynamically serve vehicle-master documents based on USE_NAS flag
 const useNasFlag = process.env.USE_NAS;

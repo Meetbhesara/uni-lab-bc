@@ -481,6 +481,8 @@ exports.adminAddExpense = async (req, res) => {
         session.endSession();
 
         // ── WhatsApp Notification to Employee after Expense Submission ───────────
+        let whatsappSent = false;
+        let whatsappError = null;
         try {
             const empDoc = await EmployeeMaster.findById(employeeId).select('name phone foodAllowance');
 
@@ -530,10 +532,11 @@ exports.adminAddExpense = async (req, res) => {
                     `*Total Expense:* *₹${Number(totalExpense).toLocaleString('en-IN')}*`;
 
                 await sendWhatsapp(empDoc.phone, msg, req.user?.id);
+                whatsappSent = true;
             }
         } catch (wpErr) {
-            // WhatsApp failure must NOT affect the expense submission
-            console.error('[DailyExpense] WhatsApp notification failed (non-critical):', wpErr.message);
+            console.error('[DailyExpense] WhatsApp notification failed:', wpErr.message);
+            whatsappError = wpErr.message;
         }
         // ────────────────────────────────────────────────────────────────────
 
@@ -542,7 +545,9 @@ exports.adminAddExpense = async (req, res) => {
             success: true, 
             message: existingExpense ? 'Expense merged and balance updated' : 'Expense saved and balance updated', 
             data: savedExpense,
-            updatedEmployee: employee
+            updatedEmployee: employee,
+            whatsappSent,
+            whatsappError
         });
     } catch (error) {
         await session.abortTransaction();
@@ -954,8 +959,36 @@ exports.addExpense = async (req, res) => {
 
         await session.commitTransaction();
         session.endSession();
+
+        let whatsappSent = false;
+        let whatsappError = null;
+        try {
+            if (employee && employee.phone) {
+                const formattedDate = date ? new Date(date).toLocaleDateString('en-IN', { day: '2-digit', month: 'short', year: 'numeric' }) : 'Today';
+                const msg =
+                    `📝 *Daily Expense Submitted*\n\n` +
+                    `*Employee:* *${employee.name}*\n` +
+                    `*Date:* ${formattedDate}\n` +
+                    `*Attendance:* ${calculatedAttendance || 'Present'}\n` +
+                    `*Total Expense:* *₹${Number(totalExpense).toLocaleString('en-IN')}*\n` +
+                    `*Remaining Balance:* ₹${Number(employee.totalAmount).toLocaleString('en-IN')}`;
+
+                await sendWhatsapp(employee.phone, msg);
+                whatsappSent = true;
+            }
+        } catch (wpErr) {
+            console.error('[DailyExpense Employee Portal] WhatsApp notification failed:', wpErr.message);
+            whatsappError = wpErr.message;
+        }
+
         broadcast('expense-changed', { action: 'saved', employeeId });
-        res.status(201).json({ success: true, message: 'Expense saved successfully', data: newExpense });
+        res.status(201).json({ 
+            success: true, 
+            message: 'Expense saved successfully', 
+            data: newExpense,
+            whatsappSent,
+            whatsappError
+        });
     } catch (error) {
         await session.abortTransaction();
         session.endSession();

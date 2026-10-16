@@ -8,6 +8,7 @@ const UserSchema = new mongoose.Schema({
     companyName: { type: String },
     contactPersonName: { type: String },
     gstNumber: { type: String },
+    address: { type: String },
     isAdmin: { type: Boolean, default: false },
     isSuperAdmin: { type: Boolean, default: false },
     otp: { type: String },

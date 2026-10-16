@@ -12,6 +12,7 @@ const EnquirySchema = new mongoose.Schema({
     companyName: { type: String },
     contactPersonName: { type: String },
     gstNumber: { type: String },
+    address: { type: String },
     email: { type: String },
     phone: { type: String },
     message: { type: String },
@@ -52,7 +53,7 @@ EnquirySchema.pre('save', function (next) {
     next();
 });
 
-// ── Indexes (fixes p95=5.3s under load) ───────────────────────────────
+// Indexes (fixes p95=5.3s under load)
 // 1. Admin panel: show newest enquiries first, filter by status
 EnquirySchema.index({ status: 1, createdAt: -1 });
 // 2. Unread badge count (isSeen=false)

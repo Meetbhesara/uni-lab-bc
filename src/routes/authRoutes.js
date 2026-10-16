@@ -2,7 +2,7 @@ const express = require('express');
 const router = express.Router();
 const auth = require('../middlewares/auth');
 const checkPermission = require('../middlewares/checkPermission');
-const { register, login, phoneLogin, phoneRegister, getUserByPhone, sendOtp, verifyOtp, sendAdminOtp, verifyAdminOtp, createAdmin, getAdmins, updateAdminPermissions, updateAdmin, setup2FA, verifyAndEnable2FA, loginWith2FA, resetWithBackupCode, getMe, getUsers, getGeofenceSettings, updateGeofenceSettings, getAdminLoginReport, logout, deleteAccount } = require('../controllers/authController');
+const { register, login, phoneLogin, phoneRegister, getUserByPhone, sendOtp, verifyOtp, sendAdminOtp, verifyAdminOtp, createAdmin, getAdmins, updateAdminPermissions, updateAdmin, setup2FA, verifyAndEnable2FA, loginWith2FA, resetWithBackupCode, getMe, getUsers, updateUser, getGeofenceSettings, updateGeofenceSettings, getAdminLoginReport, logout, deleteAccount, syncUsersToGoogleContactsHandler } = require('../controllers/authController');
 
 router.get('/me', auth, getMe);
 router.post('/logout', auth, logout);
@@ -25,6 +25,9 @@ router.patch('/admins/:id/permissions', updateAdminPermissions);
 router.put('/admins/:id', updateAdmin);
 router.patch('/admins/:id', updateAdmin);
 router.get('/users', getUsers);
+router.post('/sync-users-to-google-contacts', auth, syncUsersToGoogleContactsHandler);
+router.put('/users/:id', updateUser);
+router.patch('/users/:id', updateUser);
 router.delete('/users/:id', deleteAccount);
 router.delete('/account/:id', deleteAccount);
 // MFA / TOTP Routes
