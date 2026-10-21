@@ -22,6 +22,12 @@ const storeCompany = async (req, res) => {
         }
         
         const docFields = ['logo', 'udyamDoc', 'panCardDoc', 'gstDoc', 'cancelledChequeDoc', 'companyStamp'];
+        let catalogsList = [];
+        if (data.existingCatalogs) {
+            try {
+                catalogsList = typeof data.existingCatalogs === 'string' ? JSON.parse(data.existingCatalogs) : data.existingCatalogs;
+            } catch (e) {}
+        }
         let otherDocsList = [];
         if (data.existingOtherDocs) {
             try {
@@ -40,6 +46,31 @@ const storeCompany = async (req, res) => {
                 }
             });
 
+                        // Multiple catalogs & brochures
+            const newCatalogFiles = [
+                ...(req.files['catalogs'] || []),
+                ...(req.files['catalogFiles'] || [])
+            ];
+
+            if (newCatalogFiles.length > 0) {
+                let titles = [];
+                if (data.catalogTitles) {
+                    try {
+                        titles = typeof data.catalogTitles === 'string' ? JSON.parse(data.catalogTitles) : data.catalogTitles;
+                    } catch (e) {
+                        titles = [data.catalogTitles];
+                    }
+                }
+                newCatalogFiles.forEach((file, idx) => {
+                    const catTitle = (titles && titles[idx]) || data.catalogTitle?.trim() || file.originalname || 'Catalog / Brochure';
+                    const fileUrl = `/uploads/company_master/${folderName}/${file.filename}`;
+                    catalogsList.push({
+                        title: catTitle,
+                        url: fileUrl,
+                        uploadedAt: new Date()
+                    });
+                });
+            }
             // Multiple other documents
             const newOtherDocFiles = [
                 ...(req.files['otherDoc'] || []),
@@ -70,6 +101,7 @@ const storeCompany = async (req, res) => {
         }
 
         data.otherDocs = otherDocsList;
+        data.catalogs = catalogsList;
 
         const newCompany = new CompanyMaster(data);
         await newCompany.save();
@@ -103,6 +135,28 @@ const updateCompany = async (req, res) => {
                 data[field] = null;
             }
         });
+
+        // Initialize catalogs from existing record or incoming payload
+        let catalogsList = Array.isArray(existingCompany.catalogs) ? [...existingCompany.catalogs] : [];
+
+        if (data.existingCatalogs !== undefined) {
+            try {
+                catalogsList = typeof data.existingCatalogs === 'string' ? JSON.parse(data.existingCatalogs) : data.existingCatalogs;
+            } catch (e) {}
+        }
+
+        if (data.remove_catalog_id) {
+            catalogsList = catalogsList.filter(d => String(d._id) !== String(data.remove_catalog_id));
+        }
+        if (data.remove_catalog_url) {
+            catalogsList = catalogsList.filter(d => d.url !== data.remove_catalog_url);
+        }
+        if (data.remove_catalog_index !== undefined) {
+            const idx = parseInt(data.remove_catalog_index, 10);
+            if (!isNaN(idx) && idx >= 0 && idx < catalogsList.length) {
+                catalogsList.splice(idx, 1);
+            }
+        }
 
         // Initialize otherDocs from existing record or incoming payload
         let otherDocsList = Array.isArray(existingCompany.otherDocs) ? [...existingCompany.otherDocs] : [];
@@ -153,6 +207,31 @@ const updateCompany = async (req, res) => {
                 }
             });
 
+                        // MULTIPLE CATALOGS & BROCHURES: Append without overwriting!
+            const newCatalogFiles = [
+                ...(req.files['catalogs'] || []),
+                ...(req.files['catalogFiles'] || [])
+            ];
+
+            if (newCatalogFiles.length > 0) {
+                let titles = [];
+                if (data.catalogTitles) {
+                    try {
+                        titles = typeof data.catalogTitles === 'string' ? JSON.parse(data.catalogTitles) : data.catalogTitles;
+                    } catch (e) {
+                        titles = [data.catalogTitles];
+                    }
+                }
+                newCatalogFiles.forEach((file, idx) => {
+                    const catTitle = (titles && titles[idx]) || data.catalogTitle?.trim() || file.originalname || 'Catalog / Brochure';
+                    const fileUrl = `/uploads/company_master/${folderName}/${file.filename}`;
+                    catalogsList.push({
+                        title: catTitle,
+                        url: fileUrl,
+                        uploadedAt: new Date()
+                    });
+                });
+            }
             // MULTIPLE OTHER DOCUMENTS: Append without overwriting!
             const newOtherDocFiles = [
                 ...(req.files['otherDoc'] || []),
@@ -183,6 +262,7 @@ const updateCompany = async (req, res) => {
         }
 
         data.otherDocs = otherDocsList;
+        data.catalogs = catalogsList;
 
         const updatedCompany = await CompanyMaster.findByIdAndUpdate(id, data, { new: true });
         res.status(200).json({ success: true, message: 'Company updated successfully', data: updatedCompany });

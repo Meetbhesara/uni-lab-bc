@@ -7,6 +7,12 @@ const bankDetailsSchema = new mongoose.Schema({
     ifscCode: { type: String, trim: true },
 });
 
+const catalogItemSchema = new mongoose.Schema({
+    title: { type: String, trim: true, default: 'Catalog / Brochure' },
+    url: { type: String, required: true },
+    uploadedAt: { type: Date, default: Date.now }
+});
+
 const otherDocItemSchema = new mongoose.Schema({
     title: { type: String, trim: true, default: 'Other Document' },
     url: { type: String, required: true },
@@ -33,7 +39,8 @@ const companyMasterSchema = new mongoose.Schema({
     companyStamp: { type: String },
     otherDoc: { type: String },
     otherDocTitle: { type: String, trim: true },
-    otherDocs: { type: [otherDocItemSchema], default: [] }
+    otherDocs: { type: [otherDocItemSchema], default: [] },
+    catalogs: { type: [catalogItemSchema], default: [] }
 }, { timestamps: true });
 
 module.exports = mongoose.model('CompanyMaster', companyMasterSchema);

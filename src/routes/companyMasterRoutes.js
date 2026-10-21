@@ -55,7 +55,9 @@ const companyUploadFields = upload.fields([
     { name: 'cancelledChequeDoc', maxCount: 1 },
     { name: 'companyStamp', maxCount: 1 },
     { name: 'otherDoc', maxCount: 1 },
-    { name: 'otherDocs', maxCount: 50 } // allow multiple other documents
+    { name: 'otherDocs', maxCount: 50 },
+    { name: 'catalogs', maxCount: 50 },
+    { name: 'catalogFiles', maxCount: 50 } // allow multiple other documents
 ]);
 
 router.post('/', companyUploadFields, storeCompany);
