@@ -19,7 +19,7 @@ require('dotenv').config();
 const mongoose = require('mongoose');
 
 // Determine MongoDB Connection URI
-const mongoUri = process.argv[2] || process.env.MONGO_URI || process.env.MONGODB_URI;
+const mongoUri = process.argv[2] || process.env.MONGO_URI || process.env.MONGODB_URI || process.env.MONGO_URL;
 
 if (!mongoUri) {
     console.error("\x1b[31m%s\x1b[0m", "❌ Error: MongoDB connection string not found!");
